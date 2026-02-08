@@ -112,26 +112,38 @@ void updateDisplay() {
 }
 
 void setup() {
-    // Crucial for ESP32-C3 Super Mini Serial
+    // Improved Serial initialization for Super Mini
     Serial.begin(115200);
-    delay(2000);
-    Serial.println("\n--- ESP32-C3 Super Mini Start ---");
+    // Wait for Serial Monitor with timeout
+    while (!Serial && millis() < 3000);
+    delay(500);
+
+    Serial.println("\n\n====================================");
+    Serial.println("   ESP32-C3 Super Mini Start");
+    Serial.println("====================================");
+    Serial.flush();
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
     Serial.print("Chip ID: "); Serial.println(chipId);
+    Serial.flush();
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    Serial.println("Initializing I2C...");
+    Serial.println("1. Initializing I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
+    Serial.flush();
 
-    Serial.println("Initializing Display...");
+    Serial.println("2. Initializing Display...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("SSD1306 allocation failed!"));
+        Serial.println("SSD1306 ERROR: Check connections/address (0x3C)");
+    } else {
+        Serial.println("SSD1306 OK");
     }
+    Serial.flush();
+
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
@@ -139,32 +151,37 @@ void setup() {
     display.println("Connecting...");
     display.display();
 
-    Serial.println("Initializing AHT10...");
+    Serial.println("3. Initializing AHT10...");
     if (!aht.begin()) {
-        Serial.println("AHT10 sensor not found!");
+        Serial.println("AHT10 ERROR: Not found!");
         sensorFound = false;
     } else {
-        Serial.println("AHT10 sensor found.");
+        Serial.println("AHT10 OK");
         sensorFound = true;
     }
+    Serial.flush();
 
-    Serial.println("Starting WiFiManager...");
+    Serial.println("4. Starting WiFiManager...");
     WiFiManager wm;
-    // Uncomment for debugging WiFi issues
-    // wm.setDebugOutput(true);
+    // Set timeout for Config Portal so it doesn't block forever if no interaction
+    wm.setConfigPortalTimeout(180);
 
     bool res = wm.autoConnect("ESP32C3-Setup");
 
     if(!res) {
-        Serial.println("WiFi connection failed!");
+        Serial.println("WiFi: Failed to connect or timed out.");
     } else {
-        Serial.println("WiFi connected!");
+        Serial.println("WiFi: Connected!");
     }
+    Serial.flush();
 
     timeClient.begin();
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.setBufferSize(512);
-    Serial.println("Setup complete.");
+
+    Serial.println("Setup Complete!");
+    Serial.println("====================================\n");
+    Serial.flush();
 }
 
 void loop() {
@@ -192,7 +209,7 @@ void loop() {
 
     if (!mqttClient.connected()) {
         static unsigned long lastReconnect = 0;
-        if (currentMillis - lastReconnect > 10000) {
+        if (currentMillis - lastReconnect > 15000) {
             lastReconnect = currentMillis;
             reconnectMQTT();
         }

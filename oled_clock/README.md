@@ -9,29 +9,23 @@ Aby poprawnie skompilować i wgrać program na **ESP32-C3 Super Mini**, wykonaj 
 ### 1. Ustawienia Płytki (Board)
 W menu **Tools** (Narzędzia) ustaw:
 - **Board**: "ESP32C3 Dev Module"
-- **USB CDC On Boot**: **Enabled** (To jest kluczowe, aby widzieć komunikaty w Serial Monitorze!)
-- **Flash Mode**: "QIO" (lub "DIO" jeśli "QIO" nie działa)
+- **USB CDC On Boot**: **Enabled** (Kluczowe dla Serial Monitora przez USB!)
+- **Flash Mode**: "QIO" (lub "DIO")
 - **Flash Size**: "4MB"
-- **Partition Scheme**: "Default 4MB with spiffs"
 
-### 2. Biblioteki
-Upewnij się, że masz zainstalowane poniższe biblioteki (przez Library Manager):
-- **Adafruit SSD1306**
-- **Adafruit GFX Library**
-- **Adafruit AHTX0**
-- **WiFiManager** (autor: tzapu)
-- **PubSubClient** (autor: knolleary)
-- **NTPClient** (autor: Arduino)
-- **Adafruit BusIO**
+### 2. Ostrzeżenie kompilacji (Framework Warning)
+Podczas kompilacji możesz zobaczyć ostrzeżenie:
+`warning: 'return' with no value, in function returning non-void` w pliku `esp32-hal-uart.c`.
+**Jest to znany błąd w oficjalnym frameworku Espressif i jest on całkowicie nieszkodliwy.** Program będzie działał poprawnie mimo tego komunikatu.
 
-### 3. Połączenie i Debugowanie
+### 3. Debugowanie (Serial Monitor)
 1. Podłącz urządzenie przez USB.
-2. Wybierz odpowiedni Port w Arduino IDE.
-3. Otwórz **Serial Monitor** i ustaw prędkość **115200**.
-4. Jeśli po wgraniu nic nie widać, naciśnij przycisk **RESET** na płytce. Dzięki ustawieniu "USB CDC On Boot: Enabled" powinieneś zobaczyć logi startowe po około 2 sekundach od startu.
+2. Otwórz **Serial Monitor** i ustaw prędkość **115200**.
+3. Naciśnij przycisk **RESET** na płytce.
+4. Dzięki opcji "USB CDC On Boot" oraz dodanemu w kodzie oczekiwaniu (`while(!Serial)`), logi startowe powinny pojawić się natychmiast po otwarciu monitora.
 
 ## Funkcje programu
-- **WiFiManager**: Przy pierwszym starcie (lub gdy nie ma zasięgu) pojawi się sieć AP o nazwie **ESP32C3-Setup**. Połącz się z nią telefonem, aby podać dane do swojego WiFi.
-- **Home Assistant**: Urządzenie automatycznie wysyła dane do brokera MQTT (domyślnie broker.hivemq.com) i rejestruje się w Home Assistant przez MQTT Discovery.
-- **Wyświetlacz**: Pionowy układ godziny i danych z czujnika.
-- **LED**: Dioda na pinie 0 miga krótko co 10 sekund.
+- **WiFiManager**: Rozgłasza sieć AP **ESP32C3-Setup**, jeśli nie może się połączyć z WiFi.
+- **Płynny zegar**: Odświeżanie co 1 sekundę.
+- **Unikalność**: Każde urządzenie ma własne tematy MQTT oparte na Chip ID (np. `esp32c3/a1b2c3/temperature`).
+- **Pionowy Layout**: Zoptymalizowany pod ekran 0.91" (32x128).

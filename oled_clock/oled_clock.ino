@@ -7,7 +7,7 @@
  * - Flash Mode: "QIO" lub "DIO"
  * - Flash Size: "4MB"
  *
- * Wymagane biblioteki:
+ * Wymagane biblioteki (zainstaluj w Arduino IDE):
  * - Adafruit SSD1306
  * - Adafruit GFX Library
  * - Adafruit AHTX0
@@ -134,55 +134,72 @@ void updateDisplay() {
 }
 
 void setup() {
-    // Inicjalizacja Serial z opoznieniem dla Super Mini
+    // Poprawiona inicjalizacja Serial dla Super Mini
     Serial.begin(115200);
-    delay(2000);
-    Serial.println("\n--- ESP32-C3 Super Mini Start ---");
+    // Czekaj na otwarcie monitora (max 3 sekundy)
+    while (!Serial && millis() < 3000);
+    delay(500);
+
+    Serial.println("\n\n--- ESP32-C3 Super Mini Start ---");
+    Serial.flush();
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
     Serial.print("Chip ID: "); Serial.println(chipId);
+    Serial.flush();
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    Serial.println("Inicjalizacja I2C...");
+    Serial.println("1. Inicjalizacja I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
+    Serial.flush();
 
-    Serial.println("Inicjalizacja Display...");
+    Serial.println("2. Inicjalizacja Display...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("Blad inicjalizacji SSD1306!"));
+        Serial.println(F("Blad SSD1306! Sprawdz polaczenia."));
+    } else {
+        Serial.println("Display OK");
     }
+    Serial.flush();
+
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
     display.println("Connecting...");
     display.display();
 
-    Serial.println("Inicjalizacja AHT10...");
+    Serial.println("3. Inicjalizacja AHT10...");
     if (!aht.begin()) {
-        Serial.println("Nie znaleziono czujnika AHT10!");
+        Serial.println("Blad AHT10!");
         sensorFound = false;
     } else {
-        Serial.println("Czujnik AHT10 OK.");
+        Serial.println("AHT10 OK");
         sensorFound = true;
     }
+    Serial.flush();
 
-    Serial.println("Start WiFiManager...");
+    Serial.println("4. Start WiFiManager...");
     WiFiManager wm;
+    // Timeout dla portalu konfiguracyjnego (3 minuty)
+    wm.setConfigPortalTimeout(180);
+
     bool res = wm.autoConnect("ESP32C3-Setup");
 
     if(!res) {
-        Serial.println("Blad polaczenia WiFi!");
+        Serial.println("WiFi: Blad polaczenia lub timeout.");
     } else {
-        Serial.println("WiFi polaczone!");
+        Serial.println("WiFi: Polaczono!");
     }
+    Serial.flush();
 
     timeClient.begin();
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.setBufferSize(512);
+
     Serial.println("Setup gotowy.");
+    Serial.flush();
 }
 
 void loop() {
@@ -210,7 +227,7 @@ void loop() {
 
     if (!mqttClient.connected()) {
         static unsigned long lastReconnect = 0;
-        if (currentMillis - lastReconnect > 10000) {
+        if (currentMillis - lastReconnect > 15000) {
             lastReconnect = currentMillis;
             reconnectMQTT();
         }
