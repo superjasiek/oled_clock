@@ -35,7 +35,7 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600);
 unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
-const long sensorInterval = 1000; // Updated to 1s for smoother clock
+const long sensorInterval = 1000;
 const long ledInterval = 10000;
 const long mqttInterval = 60000;
 
@@ -58,7 +58,7 @@ void setupMQTTDiscovery() {
 
 void reconnectMQTT() {
     if (!mqttClient.connected()) {
-        Serial.print("Attempting MQTT connection...");
+        Serial.print("Connecting to MQTT...");
         String clientId = "ESP32C3Client-";
         clientId += String(random(0xffff), HEX);
         if (mqttClient.connect(clientId.c_str())) {
@@ -112,19 +112,25 @@ void updateDisplay() {
 }
 
 void setup() {
+    // Crucial for ESP32-C3 Super Mini Serial
     Serial.begin(115200);
+    delay(2000);
+    Serial.println("\n--- ESP32-C3 Super Mini Start ---");
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
+    Serial.print("Chip ID: "); Serial.println(chipId);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
+    Serial.println("Initializing I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
 
+    Serial.println("Initializing Display...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("SSD1306 allocation failed"));
+        Serial.println(F("SSD1306 allocation failed!"));
     }
     display.clearDisplay();
     display.setTextSize(1);
@@ -133,25 +139,32 @@ void setup() {
     display.println("Connecting...");
     display.display();
 
+    Serial.println("Initializing AHT10...");
     if (!aht.begin()) {
-        Serial.println("Could not find AHT10 sensor!");
+        Serial.println("AHT10 sensor not found!");
         sensorFound = false;
     } else {
+        Serial.println("AHT10 sensor found.");
         sensorFound = true;
     }
 
+    Serial.println("Starting WiFiManager...");
     WiFiManager wm;
+    // Uncomment for debugging WiFi issues
+    // wm.setDebugOutput(true);
+
     bool res = wm.autoConnect("ESP32C3-Setup");
 
     if(!res) {
-        Serial.println("Failed to connect");
+        Serial.println("WiFi connection failed!");
     } else {
-        Serial.println("Connected to WiFi");
+        Serial.println("WiFi connected!");
     }
 
     timeClient.begin();
     mqttClient.setServer(mqtt_server, mqtt_port);
-    mqttClient.setBufferSize(512); // Added for large discovery payloads
+    mqttClient.setBufferSize(512);
+    Serial.println("Setup complete.");
 }
 
 void loop() {
@@ -179,7 +192,7 @@ void loop() {
 
     if (!mqttClient.connected()) {
         static unsigned long lastReconnect = 0;
-        if (currentMillis - lastReconnect > 5000) {
+        if (currentMillis - lastReconnect > 10000) {
             lastReconnect = currentMillis;
             reconnectMQTT();
         }
