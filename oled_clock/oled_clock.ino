@@ -1,22 +1,16 @@
 /*
- * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini
+ * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini (V4)
  *
- * USTAWIENIA ARDUINO IDE (Wazne!):
+ * USTAWIENIA ARDUINO IDE:
  * - Board: "ESP32C3 Dev Module"
- * - USB CDC On Boot: "Enabled" (Dzieki temu bedzie widac napisy w Serial Monitorze)
- * - Flash Mode: "QIO" lub "DIO"
- * - Flash Size: "4MB"
+ * - USB CDC On Boot: "Enabled"
+ * - Flash Mode: "DIO"
  *
- * Wymagane biblioteki (zainstaluj w Arduino IDE):
- * - Adafruit SSD1306
- * - Adafruit GFX Library
- * - Adafruit AHTX0
- * - WiFiManager by tzapu
- * - PubSubClient by knolleary
- * - NTPClient by Arduino
- * - Adafruit BusIO
- *
- * Piny: I2C (8 SDA, 9 SCL), LED (0)
+ * ZMIANY:
+ * - Ekran obrocony o 180 stopni (setRotation(3))
+ * - Zegar 24h (bez AM/PM)
+ * - Wylaczony WiFi Power Save (pomoc w widocznosci AP)
+ * - Skaner I2C na starcie (do sprawdzenia AHT10)
  */
 
 #include <Arduino.h>
@@ -28,6 +22,7 @@
 #include <PubSubClient.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <WiFi.h>
 
 // Konfiguracja ekranu
 #define SCREEN_WIDTH 128
@@ -95,109 +90,128 @@ void reconnectMQTT() {
 
 void updateDisplay() {
     display.clearDisplay();
-    display.setRotation(1);
+    display.setRotation(3); // Obrocone o 180 (bylo 1)
 
     display.setCursor(0, 0);
     display.setTextColor(SSD1306_WHITE);
     display.setTextSize(1);
     display.println(" /////");
 
-    String ampm = timeClient.getHours() >= 12 ? "PM" : "AM";
-    display.setCursor(8, 15);
-    display.print(ampm);
-
+    // Zegar 24h
     display.setTextSize(2);
-    display.setCursor(4, 30);
+    display.setCursor(4, 25);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
 
-    display.setCursor(4, 50);
+    display.setCursor(4, 45);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    display.setCursor(4, 70);
+    display.setCursor(4, 65);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
-    display.drawLine(5, 90, 27, 90, SSD1306_WHITE);
+    display.drawLine(5, 85, 27, 85, SSD1306_WHITE);
 
     display.setTextSize(1);
-    display.setCursor(4, 100);
-    display.print((int)temperature);
-    display.print("C");
+    display.setCursor(4, 95);
+    if (sensorFound) {
+        display.print((int)temperature);
+        display.print("C");
+    } else {
+        display.print("--C");
+    }
 
-    display.setCursor(4, 115);
-    display.print((int)humidity);
-    display.print("%");
+    display.setCursor(4, 110);
+    if (sensorFound) {
+        display.print((int)humidity);
+        display.print("%");
+    } else {
+        display.print("--%");
+    }
 
     display.display();
 }
 
+void scanI2C() {
+    Serial.println("Skanowanie I2C...");
+    byte error, address;
+    int nDevices = 0;
+    for (address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.print("Urzadzenie I2C na adresie 0x");
+            if (address < 16) Serial.print("0");
+            Serial.println(address, HEX);
+            nDevices++;
+        }
+    }
+    if (nDevices == 0) Serial.println("Nie znaleziono urzadzen I2C\n");
+    else Serial.println("Skanowanie zakonczone\n");
+}
+
 void setup() {
-    // Poprawiona inicjalizacja Serial dla Super Mini
     Serial.begin(115200);
-    // Czekaj na otwarcie monitora (max 3 sekundy)
     while (!Serial && millis() < 3000);
     delay(500);
 
-    Serial.println("\n\n--- ESP32-C3 Super Mini Start ---");
+    Serial.println("\n\n--- ESP32-C3 Super Mini Start (V4) ---");
     Serial.flush();
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
-    Serial.print("Chip ID: "); Serial.println(chipId);
-    Serial.flush();
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    Serial.println("1. Inicjalizacja I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
-    Serial.flush();
+    delay(100);
+    scanI2C();
 
-    Serial.println("2. Inicjalizacja Display...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("Blad SSD1306! Sprawdz polaczenia."));
-    } else {
-        Serial.println("Display OK");
+        Serial.println(F("Blad SSD1306!"));
     }
-    Serial.flush();
 
     display.clearDisplay();
+    display.setRotation(3);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
     display.println("Connecting...");
     display.display();
 
-    Serial.println("3. Inicjalizacja AHT10...");
     if (!aht.begin()) {
-        Serial.println("Blad AHT10!");
-        sensorFound = false;
+        Serial.println("Blad AHT10! Proba ponowna...");
+        delay(1000);
+        if (!aht.begin()) {
+            Serial.println("Nadal nie znaleziono AHT10!");
+            sensorFound = false;
+        } else {
+            sensorFound = true;
+        }
     } else {
-        Serial.println("AHT10 OK");
         sensorFound = true;
     }
-    Serial.flush();
 
-    Serial.println("4. Start WiFiManager...");
+    // WiFi Power Save Off dla lepszego AP
+    WiFi.setSleep(false);
+    WiFi.mode(WIFI_AP_STA);
+
     WiFiManager wm;
-    // Timeout dla portalu konfiguracyjnego (3 minuty)
-    wm.setConfigPortalTimeout(180);
+    wm.setConfigPortalTimeout(300);
 
     bool res = wm.autoConnect("ESP32C3-Setup");
 
     if(!res) {
-        Serial.println("WiFi: Blad polaczenia lub timeout.");
+        Serial.println("WiFi: Timeout portalu.");
     } else {
         Serial.println("WiFi: Polaczono!");
     }
-    Serial.flush();
 
     timeClient.begin();
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.setBufferSize(512);
-
     Serial.println("Setup gotowy.");
     Serial.flush();
 }
@@ -225,13 +239,13 @@ void loop() {
         digitalWrite(LED_PIN, LOW);
     }
 
-    if (!mqttClient.connected()) {
+    if (!mqttClient.connected() && WiFi.status() == WL_CONNECTED) {
         static unsigned long lastReconnect = 0;
         if (currentMillis - lastReconnect > 15000) {
             lastReconnect = currentMillis;
             reconnectMQTT();
         }
-    } else {
+    } else if (mqttClient.connected()) {
         mqttClient.loop();
     }
 
