@@ -38,7 +38,7 @@
 #define LED_PIN 0
 
 // Ustawienia MQTT
-const char* mqtt_server = "broker.hivemq.com";
+const char* mqtt_server = "192.168.1.17";
 const int mqtt_port = 1883;
 String mqtt_topic_temp;
 String mqtt_topic_hum;
