@@ -8,6 +8,8 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <WiFi.h>
+#include <LittleFS.h>
+#include <ArduinoJson.h>
 
 // Configuration
 #define SCREEN_WIDTH 128
@@ -19,9 +21,12 @@
 #define I2C_SCL 9
 #define LED_PIN 0
 
-// MQTT Settings
-const char* mqtt_server = "broker.hivemq.com";
-const int mqtt_port = 1883;
+// Default MQTT Settings
+char mqtt_server[40] = "broker.hivemq.com";
+char mqtt_port[6] = "1883";
+char mqtt_user[20] = "";
+char mqtt_pass[20] = "";
+
 String mqtt_topic_temp;
 String mqtt_topic_hum;
 
@@ -43,6 +48,46 @@ const long mqttInterval = 60000;
 float temperature = 0;
 float humidity = 0;
 bool sensorFound = false;
+bool shouldSaveConfig = false;
+
+// WiFiManager callback
+void saveConfigCallback() {
+    Serial.println("Should save config");
+    shouldSaveConfig = true;
+}
+
+void loadConfig() {
+    if (LittleFS.begin(true)) {
+        if (LittleFS.exists("/config.json")) {
+            File configFile = LittleFS.open("/config.json", "r");
+            if (configFile) {
+                JsonDocument doc;
+                DeserializationError error = deserializeJson(doc, configFile);
+                if (!error) {
+                    strcpy(mqtt_server, doc["mqtt_server"] | "broker.hivemq.com");
+                    strcpy(mqtt_port, doc["mqtt_port"] | "1883");
+                    strcpy(mqtt_user, doc["mqtt_user"] | "");
+                    strcpy(mqtt_pass, doc["mqtt_pass"] | "");
+                }
+                configFile.close();
+            }
+        }
+    }
+}
+
+void saveConfig() {
+    JsonDocument doc;
+    doc["mqtt_server"] = mqtt_server;
+    doc["mqtt_port"] = mqtt_port;
+    doc["mqtt_user"] = mqtt_user;
+    doc["mqtt_pass"] = mqtt_pass;
+
+    File configFile = LittleFS.open("/config.json", "w");
+    if (configFile) {
+        serializeJson(doc, configFile);
+        configFile.close();
+    }
+}
 
 void setupMQTTDiscovery() {
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
@@ -62,7 +107,15 @@ void reconnectMQTT() {
         Serial.print("Connecting to MQTT...");
         String clientId = "ESP32C3Client-";
         clientId += String(random(0xffff), HEX);
-        if (mqttClient.connect(clientId.c_str())) {
+
+        bool connected = false;
+        if (strlen(mqtt_user) > 0) {
+            connected = mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_pass);
+        } else {
+            connected = mqttClient.connect(clientId.c_str());
+        }
+
+        if (connected) {
             Serial.println("connected");
             setupMQTTDiscovery();
         } else {
@@ -74,31 +127,38 @@ void reconnectMQTT() {
 
 void updateDisplay() {
     display.clearDisplay();
-    display.setRotation(3); // Rotated 180 from previous (was 1)
+    display.setRotation(3);
 
-    display.setCursor(0, 0);
     display.setTextColor(SSD1306_WHITE);
-    display.setTextSize(1);
-    display.println(" /////");
 
-    // Time in 24h format (no AM/PM)
+    // Slanted lines - centered and aligned
+    for(int i=0; i<5; i++) {
+        int x = 7 + i*4;
+        display.drawLine(x, 1, x+3, 7, SSD1306_WHITE);
+    }
+
+    // Upper horizontal line
+    display.drawLine(0, 11, 31, 11, SSD1306_WHITE);
+
+    // Clock 24h format
     display.setTextSize(2);
-    display.setCursor(4, 25);
+    display.setCursor(4, 18);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
 
-    display.setCursor(4, 45);
+    display.setCursor(4, 38);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    display.setCursor(4, 65);
+    display.setCursor(4, 58);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
-    display.drawLine(5, 85, 27, 85, SSD1306_WHITE);
+    // Lower horizontal line
+    display.drawLine(0, 80, 31, 80, SSD1306_WHITE);
 
     display.setTextSize(1);
-    display.setCursor(4, 95);
+    display.setCursor(4, 88);
     if (sensorFound) {
         display.print((int)temperature);
         display.print("C");
@@ -106,7 +166,7 @@ void updateDisplay() {
         display.print("--C");
     }
 
-    display.setCursor(4, 110);
+    display.setCursor(4, 102);
     if (sensorFound) {
         display.print((int)humidity);
         display.print("%");
@@ -117,93 +177,78 @@ void updateDisplay() {
     display.display();
 }
 
-void scanI2C() {
-    Serial.println("Scanning I2C...");
-    byte error, address;
-    int nDevices = 0;
-    for (address = 1; address < 127; address++) {
-        Wire.beginTransmission(address);
-        error = Wire.endTransmission();
-        if (error == 0) {
-            Serial.print("I2C device found at address 0x");
-            if (address < 16) Serial.print("0");
-            Serial.println(address, HEX);
-            nDevices++;
-        }
-    }
-    if (nDevices == 0) Serial.println("No I2C devices found\n");
-    else Serial.println("Scan finished\n");
-}
-
 void setup() {
     Serial.begin(115200);
     while (!Serial && millis() < 3000);
     delay(500);
 
-    Serial.println("\n\n--- ESP32-C3 Super Mini Start (V4) ---");
+    Serial.println("\n\n--- ESP32-C3 V5 (MQTT Config + Layout Fix) ---");
+
+    loadConfig();
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
-    Serial.print("Chip ID: "); Serial.println(chipId);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
     Wire.begin(I2C_SDA, I2C_SCL);
     delay(100);
-    scanI2C();
 
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
         Serial.println(F("SSD1306 ERROR"));
-    } else {
-        Serial.println("Display OK");
     }
 
     display.clearDisplay();
     display.setRotation(3);
-    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
-    display.println("Connecting...");
+    display.println("Setup...");
     display.display();
 
-    Serial.println("Initializing AHT10...");
     if (!aht.begin()) {
-        Serial.println("AHT10 NOT FOUND! Retrying in 1s...");
-        delay(1000);
-        if (!aht.begin()) {
-            Serial.println("AHT10 STILL NOT FOUND!");
-            sensorFound = false;
-        } else {
-            Serial.println("AHT10 OK (second attempt)");
-            sensorFound = true;
-        }
+        Serial.println("AHT10 NOT FOUND");
+        sensorFound = false;
     } else {
-        Serial.println("AHT10 OK");
         sensorFound = true;
     }
 
-    Serial.println("WiFi Setup...");
-    WiFi.setSleep(false); // Disable sleep for better AP performance
+    WiFi.setSleep(false);
     WiFi.mode(WIFI_AP_STA);
 
     WiFiManager wm;
-    wm.setConfigPortalTimeout(300); // 5 minutes
+    wm.setSaveConfigCallback(saveConfigCallback);
 
-    // Ensure the AP is visible by potentially using a different channel if needed
-    // but WiFiManager usually picks one.
+    WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", mqtt_server, 40);
+    WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqtt_port, 6);
+    WiFiManagerParameter custom_mqtt_user("user", "MQTT User", mqtt_user, 20);
+    WiFiManagerParameter custom_mqtt_pass("pass", "MQTT Password", mqtt_pass, 20);
 
-    bool res = wm.autoConnect("ESP32C3-Setup");
+    wm.addParameter(&custom_mqtt_server);
+    wm.addParameter(&custom_mqtt_port);
+    wm.addParameter(&custom_mqtt_user);
+    wm.addParameter(&custom_mqtt_pass);
 
-    if(!res) {
+    wm.setConfigPortalTimeout(300);
+
+    if(!wm.autoConnect("ESP32C3-Setup")) {
         Serial.println("WiFi: Portal Timeout");
     } else {
         Serial.println("WiFi: Connected!");
     }
 
+    strcpy(mqtt_server, custom_mqtt_server.getValue());
+    strcpy(mqtt_port, custom_mqtt_port.getValue());
+    strcpy(mqtt_user, custom_mqtt_user.getValue());
+    strcpy(mqtt_pass, custom_mqtt_pass.getValue());
+
+    if (shouldSaveConfig) {
+        saveConfig();
+    }
+
     timeClient.begin();
-    mqttClient.setServer(mqtt_server, mqtt_port);
+    mqttClient.setServer(mqtt_server, atoi(mqtt_port));
     mqttClient.setBufferSize(512);
     Serial.println("Setup Complete.");
 }
