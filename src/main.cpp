@@ -7,6 +7,7 @@
 #include <PubSubClient.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <WiFi.h>
 
 // Configuration
 #define SCREEN_WIDTH 128
@@ -73,115 +74,138 @@ void reconnectMQTT() {
 
 void updateDisplay() {
     display.clearDisplay();
-    display.setRotation(1);
+    display.setRotation(3); // Rotated 180 from previous (was 1)
 
     display.setCursor(0, 0);
     display.setTextColor(SSD1306_WHITE);
     display.setTextSize(1);
     display.println(" /////");
 
-    String ampm = timeClient.getHours() >= 12 ? "PM" : "AM";
-    display.setCursor(8, 15);
-    display.print(ampm);
-
+    // Time in 24h format (no AM/PM)
     display.setTextSize(2);
-    display.setCursor(4, 30);
+    display.setCursor(4, 25);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
 
-    display.setCursor(4, 50);
+    display.setCursor(4, 45);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    display.setCursor(4, 70);
+    display.setCursor(4, 65);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
-    display.drawLine(5, 90, 27, 90, SSD1306_WHITE);
+    display.drawLine(5, 85, 27, 85, SSD1306_WHITE);
 
     display.setTextSize(1);
-    display.setCursor(4, 100);
-    display.print((int)temperature);
-    display.print("C");
+    display.setCursor(4, 95);
+    if (sensorFound) {
+        display.print((int)temperature);
+        display.print("C");
+    } else {
+        display.print("--C");
+    }
 
-    display.setCursor(4, 115);
-    display.print((int)humidity);
-    display.print("%");
+    display.setCursor(4, 110);
+    if (sensorFound) {
+        display.print((int)humidity);
+        display.print("%");
+    } else {
+        display.print("--%");
+    }
 
     display.display();
 }
 
+void scanI2C() {
+    Serial.println("Scanning I2C...");
+    byte error, address;
+    int nDevices = 0;
+    for (address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.print("I2C device found at address 0x");
+            if (address < 16) Serial.print("0");
+            Serial.println(address, HEX);
+            nDevices++;
+        }
+    }
+    if (nDevices == 0) Serial.println("No I2C devices found\n");
+    else Serial.println("Scan finished\n");
+}
+
 void setup() {
-    // Improved Serial initialization for Super Mini
     Serial.begin(115200);
-    // Wait for Serial Monitor with timeout
     while (!Serial && millis() < 3000);
     delay(500);
 
-    Serial.println("\n\n====================================");
-    Serial.println("   ESP32-C3 Super Mini Start");
-    Serial.println("====================================");
-    Serial.flush();
+    Serial.println("\n\n--- ESP32-C3 Super Mini Start (V4) ---");
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
     Serial.print("Chip ID: "); Serial.println(chipId);
-    Serial.flush();
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    Serial.println("1. Initializing I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
-    Serial.flush();
+    delay(100);
+    scanI2C();
 
-    Serial.println("2. Initializing Display...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println("SSD1306 ERROR: Check connections/address (0x3C)");
+        Serial.println(F("SSD1306 ERROR"));
     } else {
-        Serial.println("SSD1306 OK");
+        Serial.println("Display OK");
     }
-    Serial.flush();
 
     display.clearDisplay();
+    display.setRotation(3);
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
     display.println("Connecting...");
     display.display();
 
-    Serial.println("3. Initializing AHT10...");
+    Serial.println("Initializing AHT10...");
     if (!aht.begin()) {
-        Serial.println("AHT10 ERROR: Not found!");
-        sensorFound = false;
+        Serial.println("AHT10 NOT FOUND! Retrying in 1s...");
+        delay(1000);
+        if (!aht.begin()) {
+            Serial.println("AHT10 STILL NOT FOUND!");
+            sensorFound = false;
+        } else {
+            Serial.println("AHT10 OK (second attempt)");
+            sensorFound = true;
+        }
     } else {
         Serial.println("AHT10 OK");
         sensorFound = true;
     }
-    Serial.flush();
 
-    Serial.println("4. Starting WiFiManager...");
+    Serial.println("WiFi Setup...");
+    WiFi.setSleep(false); // Disable sleep for better AP performance
+    WiFi.mode(WIFI_AP_STA);
+
     WiFiManager wm;
-    // Set timeout for Config Portal so it doesn't block forever if no interaction
-    wm.setConfigPortalTimeout(180);
+    wm.setConfigPortalTimeout(300); // 5 minutes
+
+    // Ensure the AP is visible by potentially using a different channel if needed
+    // but WiFiManager usually picks one.
 
     bool res = wm.autoConnect("ESP32C3-Setup");
 
     if(!res) {
-        Serial.println("WiFi: Failed to connect or timed out.");
+        Serial.println("WiFi: Portal Timeout");
     } else {
         Serial.println("WiFi: Connected!");
     }
-    Serial.flush();
 
     timeClient.begin();
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.setBufferSize(512);
-
-    Serial.println("Setup Complete!");
-    Serial.println("====================================\n");
-    Serial.flush();
+    Serial.println("Setup Complete.");
 }
 
 void loop() {
@@ -207,13 +231,13 @@ void loop() {
         digitalWrite(LED_PIN, LOW);
     }
 
-    if (!mqttClient.connected()) {
+    if (!mqttClient.connected() && WiFi.status() == WL_CONNECTED) {
         static unsigned long lastReconnect = 0;
         if (currentMillis - lastReconnect > 15000) {
             lastReconnect = currentMillis;
             reconnectMQTT();
         }
-    } else {
+    } else if (mqttClient.connected()) {
         mqttClient.loop();
     }
 
