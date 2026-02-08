@@ -1,7 +1,13 @@
 /*
- * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3
+ * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini
  *
- * Wymagane biblioteki (zainstaluj przez Library Manager w Arduino IDE):
+ * USTAWIENIA ARDUINO IDE (Wazne!):
+ * - Board: "ESP32C3 Dev Module"
+ * - USB CDC On Boot: "Enabled" (Dzieki temu bedzie widac napisy w Serial Monitorze)
+ * - Flash Mode: "QIO" lub "DIO"
+ * - Flash Size: "4MB"
+ *
+ * Wymagane biblioteki:
  * - Adafruit SSD1306
  * - Adafruit GFX Library
  * - Adafruit AHTX0
@@ -10,10 +16,7 @@
  * - NTPClient by Arduino
  * - Adafruit BusIO
  *
- * Konfiguracja pinów:
- * - I2C SDA: Pin 8
- * - I2C SCL: Pin 9
- * - LED: Pin 0
+ * Piny: I2C (8 SDA, 9 SCL), LED (0)
  */
 
 #include <Arduino.h>
@@ -32,13 +35,13 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Konfiguracja pinów
+// Konfiguracja pinow
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define LED_PIN 0
 
 // Ustawienia MQTT
-const char* mqtt_server = "192.168.1.17";
+const char* mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -54,7 +57,7 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600);
 unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
-const long sensorInterval = 1000; // Aktualizacja co 1s dla płynnego zegara
+const long sensorInterval = 1000;
 const long ledInterval = 10000;
 const long mqttInterval = 60000;
 
@@ -62,7 +65,6 @@ float temperature = 0;
 float humidity = 0;
 bool sensorFound = false;
 
-// Funkcja rejestrująca czujniki w Home Assistant (MQTT Discovery)
 void setupMQTTDiscovery() {
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
 
@@ -78,14 +80,14 @@ void setupMQTTDiscovery() {
 
 void reconnectMQTT() {
     if (!mqttClient.connected()) {
-        Serial.print("Łączenie z MQTT...");
+        Serial.print("Connecting to MQTT...");
         String clientId = "ESP32C3Client-";
         clientId += String(random(0xffff), HEX);
         if (mqttClient.connect(clientId.c_str())) {
-            Serial.println("połączono");
+            Serial.println("connected");
             setupMQTTDiscovery();
         } else {
-            Serial.print("błąd, rc=");
+            Serial.print("failed, rc=");
             Serial.print(mqttClient.state());
         }
     }
@@ -93,7 +95,7 @@ void reconnectMQTT() {
 
 void updateDisplay() {
     display.clearDisplay();
-    display.setRotation(1); // Orientacja pionowa
+    display.setRotation(1);
 
     display.setCursor(0, 0);
     display.setTextColor(SSD1306_WHITE);
@@ -105,17 +107,14 @@ void updateDisplay() {
     display.print(ampm);
 
     display.setTextSize(2);
-    // Godzina
     display.setCursor(4, 30);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
 
-    // Minuty
     display.setCursor(4, 50);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    // Sekundy
     display.setCursor(4, 70);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
@@ -135,45 +134,55 @@ void updateDisplay() {
 }
 
 void setup() {
+    // Inicjalizacja Serial z opoznieniem dla Super Mini
     Serial.begin(115200);
+    delay(2000);
+    Serial.println("\n--- ESP32-C3 Super Mini Start ---");
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
     mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
     mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
+    Serial.print("Chip ID: "); Serial.println(chipId);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
+    Serial.println("Inicjalizacja I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
 
+    Serial.println("Inicjalizacja Display...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("Błąd inicjalizacji SSD1306"));
+        Serial.println(F("Blad inicjalizacji SSD1306!"));
     }
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
-    display.println("Łączenie...");
+    display.println("Connecting...");
     display.display();
 
+    Serial.println("Inicjalizacja AHT10...");
     if (!aht.begin()) {
         Serial.println("Nie znaleziono czujnika AHT10!");
         sensorFound = false;
     } else {
+        Serial.println("Czujnik AHT10 OK.");
         sensorFound = true;
     }
 
+    Serial.println("Start WiFiManager...");
     WiFiManager wm;
     bool res = wm.autoConnect("ESP32C3-Setup");
 
     if(!res) {
-        Serial.println("Błąd połączenia z WiFi");
+        Serial.println("Blad polaczenia WiFi!");
     } else {
-        Serial.println("Połączono z WiFi");
+        Serial.println("WiFi polaczone!");
     }
 
     timeClient.begin();
     mqttClient.setServer(mqtt_server, mqtt_port);
-    mqttClient.setBufferSize(512); // Zwiększony bufor dla HA discovery
+    mqttClient.setBufferSize(512);
+    Serial.println("Setup gotowy.");
 }
 
 void loop() {
@@ -201,7 +210,7 @@ void loop() {
 
     if (!mqttClient.connected()) {
         static unsigned long lastReconnect = 0;
-        if (currentMillis - lastReconnect > 5000) {
+        if (currentMillis - lastReconnect > 10000) {
             lastReconnect = currentMillis;
             reconnectMQTT();
         }
