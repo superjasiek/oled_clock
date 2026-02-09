@@ -1,12 +1,11 @@
 /*
- * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-S3 Mini (V6.1)
+ * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-S3 Mini (V6.2)
  *
- * ZMIANY V6.1:
- * - Przeniesienie na ESP32-S3 (kompatybilne z C3 po zmianie plytki w IDE)
+ * ZMIANY V6.2:
+ * - Dodano mozliwosc ustawienia OFFSETU temperatury przez WWW
+ * - Poprawiono bezpieczenstwo kopiowania danych (strlcpy)
  * - Wlasny interfejs WWW do konfiguracji MQTT i sprzetu
  * - Funkcja "Screen Saver": wylaczanie ekranu cyklicznie
- * - Bezpieczne kopiowanie danych (strlcpy)
- * - Naprawiony blad buffer overflow
  */
 
 #include <Arduino.h>
@@ -42,6 +41,7 @@ char mqtt_pass[20] = "";
 int led_interval = 10000;
 int display_on_min = 2;
 int display_period_min = 10;
+float temp_offset = 0.0;
 
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -82,6 +82,7 @@ void loadConfig() {
                     led_interval = doc["led_interval"] | 10000;
                     display_on_min = doc["display_on_min"] | 2;
                     display_period_min = doc["display_period_min"] | 10;
+                    temp_offset = doc["temp_offset"] | 0.0;
                 }
                 configFile.close();
             }
@@ -98,6 +99,7 @@ void saveConfig() {
     doc["led_interval"] = led_interval;
     doc["display_on_min"] = display_on_min;
     doc["display_period_min"] = display_period_min;
+    doc["temp_offset"] = temp_offset;
 
     File configFile = LittleFS.open("/config.json", "w");
     if (configFile) {
@@ -109,7 +111,7 @@ void saveConfig() {
 // Obsluga WWW
 void handleRoot() {
     String html = "<html><head><meta charset='UTF-8'></head><body><h1>ESP32 Node Status</h1>";
-    html += "<p>Temperatura: " + String(temperature) + " C</p>";
+    html += "<p>Temperatura: " + String(temperature) + " C (Offset: " + String(temp_offset) + ")</p>";
     html += "<p>Wilgotnosc: " + String(humidity) + " %</p>";
     html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
     html += "<p><a href='/config'>Ustawienia Konfiguracji</a></p>";
@@ -125,7 +127,8 @@ void handleConfig() {
     html += "Haslo MQTT: <input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'><br><br>";
     html += "Miganie LED (ms, 0=off): <input type='text' name='led' value='" + String(led_interval) + "'><br>";
     html += "Ekran WLACZONY (min): <input type='text' name='disp_on' value='" + String(display_on_min) + "'><br>";
-    html += "Cykl calkowity (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br><br>";
+    html += "Cykl calkowity (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br>";
+    html += "Offset Temperatury (C): <input type='text' name='offset' value='" + String(temp_offset) + "'><br><br>";
     html += "<input type='submit' value='Zapisz'>";
     html += "</form><p><a href='/'>Powrot</a></p></body></html>";
     server.send(200, "text/html", html);
@@ -139,6 +142,7 @@ void handleSave() {
     if (server.hasArg("led")) led_interval = server.arg("led").toInt();
     if (server.hasArg("disp_on")) display_on_min = server.arg("disp_on").toInt();
     if (server.hasArg("disp_per")) display_period_min = server.arg("disp_per").toInt();
+    if (server.hasArg("offset")) temp_offset = server.arg("offset").toFloat();
 
     saveConfig();
     server.send(200, "text/html", "Ustawienia zapisane. <a href='/'>Powrot</a>");
@@ -152,10 +156,10 @@ void setupMQTTDiscovery() {
     String deviceName = "ESP32-Station-" + chipId;
 
     String tempConfigTopic = "homeassistant/sensor/" + chipId + "_T/config";
-    String tempPayload = "{\"name\": \"Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \"" + chipId + "_T\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
+    String tempPayload = "{\"name\": \"Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \""+ chipId + "_T\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
     String humConfigTopic = "homeassistant/sensor/" + chipId + "_H/config";
-    String humPayload = "{\"name\": \"Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \"" + chipId + "_H\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
+    String humPayload = "{\"name\": \"Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \""+ chipId + "_H\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
     mqttClient.publish(tempConfigTopic.c_str(), tempPayload.c_str(), true);
     mqttClient.publish(humConfigTopic.c_str(), humPayload.c_str(), true);
@@ -163,7 +167,7 @@ void setupMQTTDiscovery() {
 
 void reconnectMQTT() {
     if (!mqttClient.connected()) {
-        Serial.print("Attempting MQTT connection...");
+        Serial.print("Connecting to MQTT...");
         String clientId = "ESP32Client-" + String(random(0xffff), HEX);
 
         bool connected = false;
@@ -294,7 +298,7 @@ void loop() {
         if (sensorFound) {
             sensors_event_t hum, temp;
             aht.getEvent(&hum, &temp);
-            temperature = temp.temperature;
+            temperature = temp.temperature + temp_offset;
             humidity = hum.relative_humidity;
         }
         updateDisplay();
