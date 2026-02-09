@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <WebServer.h>
 
 // Configuration
 #define SCREEN_WIDTH 128
@@ -17,15 +18,19 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
+// Pins as requested by user
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define LED_PIN 0
 
-// Default MQTT Settings
+// Configuration Variables
 char mqtt_server[40] = "broker.hivemq.com";
-char mqtt_port[6] = "1883";
+int mqtt_port = 1883;
 char mqtt_user[20] = "";
 char mqtt_pass[20] = "";
+int led_interval = 10000;      // ms, 0 to disable
+int display_on_min = 2;        // Minutes display is ON
+int display_period_min = 10;   // Total cycle period in minutes
 
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -37,25 +42,20 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600);
+WebServer server(80);
 
 unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
 const long sensorInterval = 1000;
-const long ledInterval = 10000;
 const long mqttInterval = 60000;
 
 float temperature = 0;
 float humidity = 0;
 bool sensorFound = false;
-bool shouldSaveConfig = false;
+bool displayOn = true;
 
-// WiFiManager callback
-void saveConfigCallback() {
-    Serial.println("Should save config");
-    shouldSaveConfig = true;
-}
-
+// Persistence
 void loadConfig() {
     if (LittleFS.begin(true)) {
         if (LittleFS.exists("/config.json")) {
@@ -64,10 +64,13 @@ void loadConfig() {
                 JsonDocument doc;
                 DeserializationError error = deserializeJson(doc, configFile);
                 if (!error) {
-                    strcpy(mqtt_server, doc["mqtt_server"] | "broker.hivemq.com");
-                    strcpy(mqtt_port, doc["mqtt_port"] | "1883");
-                    strcpy(mqtt_user, doc["mqtt_user"] | "");
-                    strcpy(mqtt_pass, doc["mqtt_pass"] | "");
+                    strlcpy(mqtt_server, doc["mqtt_server"] | "broker.hivemq.com", sizeof(mqtt_server));
+                    mqtt_port = doc["mqtt_port"] | 1883;
+                    strlcpy(mqtt_user, doc["mqtt_user"] | "", sizeof(mqtt_user));
+                    strlcpy(mqtt_pass, doc["mqtt_pass"] | "", sizeof(mqtt_pass));
+                    led_interval = doc["led_interval"] | 10000;
+                    display_on_min = doc["display_on_min"] | 2;
+                    display_period_min = doc["display_period_min"] | 10;
                 }
                 configFile.close();
             }
@@ -81,6 +84,9 @@ void saveConfig() {
     doc["mqtt_port"] = mqtt_port;
     doc["mqtt_user"] = mqtt_user;
     doc["mqtt_pass"] = mqtt_pass;
+    doc["led_interval"] = led_interval;
+    doc["display_on_min"] = display_on_min;
+    doc["display_period_min"] = display_period_min;
 
     File configFile = LittleFS.open("/config.json", "w");
     if (configFile) {
@@ -89,14 +95,56 @@ void saveConfig() {
     }
 }
 
+// Web Server Handlers
+void handleRoot() {
+    String html = "<html><head><meta charset='UTF-8'></head><body><h1>ESP32 Node Status</h1>";
+    html += "<p>Temperature: " + String(temperature) + " C</p>";
+    html += "<p>Humidity: " + String(humidity) + " %</p>";
+    html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
+    html += "<p><a href='/config'>Configuration Settings</a></p>";
+    html += "</body></html>";
+    server.send(200, "text/html", html);
+}
+
+void handleConfig() {
+    String html = "<html><head><meta charset='UTF-8'></head><body><h1>Settings</h1><form action='/save' method='POST'>";
+    html += "MQTT Server: <input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'><br>";
+    html += "MQTT Port: <input type='text' name='port' value='" + String(mqtt_port) + "'><br>";
+    html += "MQTT User: <input type='text' name='user' value='" + String(mqtt_user) + "' maxlength='19'><br>";
+    html += "MQTT Password: <input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'><br><br>";
+    html += "LED Blink (ms, 0=off): <input type='text' name='led' value='" + String(led_interval) + "'><br>";
+    html += "Display ON Duration (min): <input type='text' name='disp_on' value='" + String(display_on_min) + "'><br>";
+    html += "Display Total Cycle (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br><br>";
+    html += "<input type='submit' value='Save Settings'>";
+    html += "</form><p><a href='/'>Back</a></p></body></html>";
+    server.send(200, "text/html", html);
+}
+
+void handleSave() {
+    if (server.hasArg("server")) strlcpy(mqtt_server, server.arg("server").c_str(), sizeof(mqtt_server));
+    if (server.hasArg("port")) mqtt_port = server.arg("port").toInt();
+    if (server.hasArg("user")) strlcpy(mqtt_user, server.arg("user").c_str(), sizeof(mqtt_user));
+    if (server.hasArg("pass")) strlcpy(mqtt_pass, server.arg("pass").c_str(), sizeof(mqtt_pass));
+    if (server.hasArg("led")) led_interval = server.arg("led").toInt();
+    if (server.hasArg("disp_on")) display_on_min = server.arg("disp_on").toInt();
+    if (server.hasArg("disp_per")) display_period_min = server.arg("disp_per").toInt();
+
+    saveConfig();
+    server.send(200, "text/html", "Settings Saved. <a href='/'>Back to Home</a>");
+
+    mqttClient.setServer(mqtt_server, mqtt_port);
+    mqttClient.disconnect();
+}
+
 void setupMQTTDiscovery() {
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
+    String deviceName = "ESP32-Station-" + chipId;
 
-    String tempConfigTopic = "homeassistant/sensor/esp32c3_" + chipId + "_T/config";
-    String tempPayload = "{\"name\": \"ESP32-C3 Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \"esp32c3_" + chipId + "_T\", \"dev\": {\"ids\": [\"esp32c3_" + chipId + "\"], \"name\": \"ESP32-C3 Sensor Station\"}}";
+    String tempConfigTopic = "homeassistant/sensor/" + chipId + "_T/config";
+    String tempPayload = "{\"name\": \"Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \"" + chipId + "_T\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
-    String humConfigTopic = "homeassistant/sensor/esp32c3_" + chipId + "_H/config";
-    String humPayload = "{\"name\": \"ESP32-C3 Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \"esp32c3_" + chipId + "_H\", \"dev\": {\"ids\": [\"esp32c3_" + chipId + "\"], \"name\": \"ESP32-C3 Sensor Station\"}}";
+    String humConfigTopic = "homeassistant/sensor/" + chipId + "_H/config";
+    String humPayload = "{\"name\": \"Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \"" + chipId + "_H\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
     mqttClient.publish(tempConfigTopic.c_str(), tempPayload.c_str(), true);
     mqttClient.publish(humConfigTopic.c_str(), humPayload.c_str(), true);
@@ -104,9 +152,8 @@ void setupMQTTDiscovery() {
 
 void reconnectMQTT() {
     if (!mqttClient.connected()) {
-        Serial.print("Connecting to MQTT...");
-        String clientId = "ESP32C3Client-";
-        clientId += String(random(0xffff), HEX);
+        Serial.print("Attempting MQTT connection...");
+        String clientId = "ESP32Client-" + String(random(0xffff), HEX);
 
         bool connected = false;
         if (strlen(mqtt_user) > 0) {
@@ -128,52 +175,40 @@ void reconnectMQTT() {
 void updateDisplay() {
     display.clearDisplay();
     display.setRotation(3);
-
     display.setTextColor(SSD1306_WHITE);
 
-    // Slanted lines - centered and aligned
     for(int i=0; i<5; i++) {
         int x = 7 + i*4;
         display.drawLine(x, 1, x+3, 7, SSD1306_WHITE);
     }
-
-    // Upper horizontal line
     display.drawLine(0, 11, 31, 11, SSD1306_WHITE);
 
-    // Clock 24h format
     display.setTextSize(2);
     display.setCursor(4, 18);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
-
     display.setCursor(4, 38);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
-
     display.setCursor(4, 58);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
-    // Lower horizontal line
     display.drawLine(0, 80, 31, 80, SSD1306_WHITE);
 
     display.setTextSize(1);
     display.setCursor(4, 88);
     if (sensorFound) {
-        display.print((int)temperature);
-        display.print("C");
+        display.print((int)temperature); display.print("C");
     } else {
         display.print("--C");
     }
-
     display.setCursor(4, 102);
     if (sensorFound) {
-        display.print((int)humidity);
-        display.print("%");
+        display.print((int)humidity); display.print("%");
     } else {
         display.print("--%");
     }
-
     display.display();
 }
 
@@ -182,83 +217,68 @@ void setup() {
     while (!Serial && millis() < 3000);
     delay(500);
 
-    Serial.println("\n\n--- ESP32-C3 V5 (MQTT Config + Layout Fix) ---");
-
     loadConfig();
 
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
-    mqtt_topic_temp = "esp32c3/" + chipId + "/temperature";
-    mqtt_topic_hum = "esp32c3/" + chipId + "/humidity";
+    mqtt_topic_temp = "esp32/" + chipId + "/temperature";
+    mqtt_topic_hum = "esp32/" + chipId + "/humidity";
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
     Wire.begin(I2C_SDA, I2C_SCL);
-    delay(100);
-
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println(F("SSD1306 ERROR"));
+        Serial.println("SSD1306 ERROR");
     }
 
     display.clearDisplay();
     display.setRotation(3);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
-    display.println("Setup...");
+    display.println("Starting...");
     display.display();
 
     if (!aht.begin()) {
-        Serial.println("AHT10 NOT FOUND");
         sensorFound = false;
     } else {
         sensorFound = true;
     }
 
     WiFi.setSleep(false);
-    WiFi.mode(WIFI_AP_STA);
-
     WiFiManager wm;
-    wm.setSaveConfigCallback(saveConfigCallback);
-
-    WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", mqtt_server, 40);
-    WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqtt_port, 6);
-    WiFiManagerParameter custom_mqtt_user("user", "MQTT User", mqtt_user, 20);
-    WiFiManagerParameter custom_mqtt_pass("pass", "MQTT Password", mqtt_pass, 20);
-
-    wm.addParameter(&custom_mqtt_server);
-    wm.addParameter(&custom_mqtt_port);
-    wm.addParameter(&custom_mqtt_user);
-    wm.addParameter(&custom_mqtt_pass);
-
-    wm.setConfigPortalTimeout(300);
-
-    if(!wm.autoConnect("ESP32C3-Setup")) {
-        Serial.println("WiFi: Portal Timeout");
-    } else {
-        Serial.println("WiFi: Connected!");
+    if(!wm.autoConnect("ESP32-Setup")) {
+        Serial.println("WiFi Portal Timeout");
     }
 
-    strcpy(mqtt_server, custom_mqtt_server.getValue());
-    strcpy(mqtt_port, custom_mqtt_port.getValue());
-    strcpy(mqtt_user, custom_mqtt_user.getValue());
-    strcpy(mqtt_pass, custom_mqtt_pass.getValue());
-
-    if (shouldSaveConfig) {
-        saveConfig();
-    }
+    server.on("/", handleRoot);
+    server.on("/config", handleConfig);
+    server.on("/save", HTTP_POST, handleSave);
+    server.begin();
 
     timeClient.begin();
-    mqttClient.setServer(mqtt_server, atoi(mqtt_port));
+    mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.setBufferSize(512);
+
     Serial.println("Setup Complete.");
 }
 
 void loop() {
     unsigned long currentMillis = millis();
-
+    server.handleClient();
     timeClient.update();
 
-    if (currentMillis - lastSensorRead >= sensorInterval) {
+    if (display_period_min > 0) {
+        long currentTotalMins = (millis() / 60000);
+        bool shouldBeOn = (currentTotalMins % display_period_min) < display_on_min;
+
+        if (shouldBeOn != displayOn) {
+            displayOn = shouldBeOn;
+            if (displayOn) display.ssd1306_command(SSD1306_DISPLAYON);
+            else display.ssd1306_command(SSD1306_DISPLAYOFF);
+        }
+    }
+
+    if (displayOn && currentMillis - lastSensorRead >= sensorInterval) {
         lastSensorRead = currentMillis;
         if (sensorFound) {
             sensors_event_t hum, temp;
@@ -269,10 +289,15 @@ void loop() {
         updateDisplay();
     }
 
-    if (currentMillis - lastLedBlink >= ledInterval) {
-        lastLedBlink = currentMillis;
-        digitalWrite(LED_PIN, HIGH);
-        delay(100);
+    if (led_interval > 0) {
+        if (currentMillis - lastLedBlink >= led_interval) {
+            lastLedBlink = currentMillis;
+            digitalWrite(LED_PIN, HIGH);
+        }
+        if (digitalRead(LED_PIN) == HIGH && currentMillis - lastLedBlink >= 100) {
+            digitalWrite(LED_PIN, LOW);
+        }
+    } else {
         digitalWrite(LED_PIN, LOW);
     }
 
