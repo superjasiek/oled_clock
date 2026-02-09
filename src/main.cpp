@@ -31,6 +31,7 @@ char mqtt_pass[20] = "";
 int led_interval = 10000;      // ms, 0 to disable
 int display_on_min = 2;        // Minutes display is ON
 int display_period_min = 10;   // Total cycle period in minutes
+float temp_offset = 0.0;       // Temperature calibration offset
 
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -71,6 +72,7 @@ void loadConfig() {
                     led_interval = doc["led_interval"] | 10000;
                     display_on_min = doc["display_on_min"] | 2;
                     display_period_min = doc["display_period_min"] | 10;
+                    temp_offset = doc["temp_offset"] | 0.0;
                 }
                 configFile.close();
             }
@@ -87,6 +89,7 @@ void saveConfig() {
     doc["led_interval"] = led_interval;
     doc["display_on_min"] = display_on_min;
     doc["display_period_min"] = display_period_min;
+    doc["temp_offset"] = temp_offset;
 
     File configFile = LittleFS.open("/config.json", "w");
     if (configFile) {
@@ -98,7 +101,7 @@ void saveConfig() {
 // Web Server Handlers
 void handleRoot() {
     String html = "<html><head><meta charset='UTF-8'></head><body><h1>ESP32 Node Status</h1>";
-    html += "<p>Temperature: " + String(temperature) + " C</p>";
+    html += "<p>Temperature: " + String(temperature) + " C (Offset: " + String(temp_offset) + ")</p>";
     html += "<p>Humidity: " + String(humidity) + " %</p>";
     html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
     html += "<p><a href='/config'>Configuration Settings</a></p>";
@@ -114,7 +117,8 @@ void handleConfig() {
     html += "MQTT Password: <input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'><br><br>";
     html += "LED Blink (ms, 0=off): <input type='text' name='led' value='" + String(led_interval) + "'><br>";
     html += "Display ON Duration (min): <input type='text' name='disp_on' value='" + String(display_on_min) + "'><br>";
-    html += "Display Total Cycle (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br><br>";
+    html += "Display Total Cycle (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br>";
+    html += "Temperature Offset (C): <input type='text' name='offset' value='" + String(temp_offset) + "'><br><br>";
     html += "<input type='submit' value='Save Settings'>";
     html += "</form><p><a href='/'>Back</a></p></body></html>";
     server.send(200, "text/html", html);
@@ -128,6 +132,7 @@ void handleSave() {
     if (server.hasArg("led")) led_interval = server.arg("led").toInt();
     if (server.hasArg("disp_on")) display_on_min = server.arg("disp_on").toInt();
     if (server.hasArg("disp_per")) display_period_min = server.arg("disp_per").toInt();
+    if (server.hasArg("offset")) temp_offset = server.arg("offset").toFloat();
 
     saveConfig();
     server.send(200, "text/html", "Settings Saved. <a href='/'>Back to Home</a>");
@@ -141,7 +146,7 @@ void setupMQTTDiscovery() {
     String deviceName = "ESP32-Station-" + chipId;
 
     String tempConfigTopic = "homeassistant/sensor/" + chipId + "_T/config";
-    String tempPayload = "{\"name\": \"Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \"" + chipId + "_T\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
+    String tempPayload = "{\"name\": \"Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \""+ chipId + "_T\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
     String humConfigTopic = "homeassistant/sensor/" + chipId + "_H/config";
     String humPayload = "{\"name\": \"Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \"" + chipId + "_H\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
@@ -283,7 +288,7 @@ void loop() {
         if (sensorFound) {
             sensors_event_t hum, temp;
             aht.getEvent(&hum, &temp);
-            temperature = temp.temperature;
+            temperature = temp.temperature + temp_offset;
             humidity = hum.relative_humidity;
         }
         updateDisplay();
