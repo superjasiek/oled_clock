@@ -18,7 +18,7 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Pins as requested by user
+// Pins
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define LED_PIN 0
@@ -28,10 +28,10 @@ char mqtt_server[40] = "broker.hivemq.com";
 int mqtt_port = 1883;
 char mqtt_user[20] = "";
 char mqtt_pass[20] = "";
-int led_interval = 10000;      // ms, 0 to disable
-int display_on_min = 2;        // Minutes display is ON
-int display_period_min = 10;   // Total cycle period in minutes
-float temp_offset = 0.0;       // Temperature calibration offset
+int led_interval = 10000;
+int display_on_min = 2;
+int display_period_min = 10;
+float temp_offset = 0.0;
 
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -49,7 +49,7 @@ unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
 const long sensorInterval = 1000;
-const long mqttInterval = 60000;
+const long mqttInterval = 1200000; // 20 minutes as requested
 
 float temperature = 0;
 float humidity = 0;
@@ -98,29 +98,49 @@ void saveConfig() {
     }
 }
 
-// Web Server Handlers
+// Web Server Handlers with CSS
+String getPageHeader(String title) {
+    String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><meta charset='UTF-8'>";
+    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:inline-block;background:#5c67f2;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}</style>";
+    html += "<title>" + title + "</title></head><body><div class='card'>";
+    return html;
+}
+
 void handleRoot() {
-    String html = "<html><head><meta charset='UTF-8'></head><body><h1>ESP32 Node Status</h1>";
-    html += "<p>Temperature: " + String(temperature) + " C (Offset: " + String(temp_offset) + ")</p>";
-    html += "<p>Humidity: " + String(humidity) + " %</p>";
+    String html = getPageHeader("ESP32-C3 Station Status");
+    html += "<h1>System Status</h1>";
+    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b> (Offset: " + String(temp_offset, 1) + ")</p>";
+    html += "<p>Humidity: <b>" + String(humidity, 0) + " %</b></p>";
     html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
-    html += "<p><a href='/config'>Configuration Settings</a></p>";
-    html += "</body></html>";
+    html += "<hr><div style='text-align:center'><a href='/config' class='btn'>Settings</a></div>";
+    html += "</div><div class='footer'>ESP32-C3 IoT Node V7</div></body></html>";
     server.send(200, "text/html", html);
 }
 
 void handleConfig() {
-    String html = "<html><head><meta charset='UTF-8'></head><body><h1>Settings</h1><form action='/save' method='POST'>";
-    html += "MQTT Server: <input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'><br>";
-    html += "MQTT Port: <input type='text' name='port' value='" + String(mqtt_port) + "'><br>";
-    html += "MQTT User: <input type='text' name='user' value='" + String(mqtt_user) + "' maxlength='19'><br>";
-    html += "MQTT Password: <input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'><br><br>";
-    html += "LED Blink (ms, 0=off): <input type='text' name='led' value='" + String(led_interval) + "'><br>";
-    html += "Display ON Duration (min): <input type='text' name='disp_on' value='" + String(display_on_min) + "'><br>";
-    html += "Display Total Cycle (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br>";
-    html += "Temperature Offset (C): <input type='text' name='offset' value='" + String(temp_offset) + "'><br><br>";
-    html += "<input type='submit' value='Save Settings'>";
-    html += "</form><p><a href='/'>Back</a></p></body></html>";
+    String html = getPageHeader("Configuration");
+    html += "<h1>Settings</h1><form action='/save' method='POST' oninput='out_off.value=offset.value; out_led.value=led.value; out_on.value=disp_on.value; out_per.value=disp_per.value'>";
+
+    html += "<div class='input-group'><label>MQTT Server</label><input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'></div>";
+    html += "<div class='input-group'><label>MQTT Port</label><input type='number' name='port' value='" + String(mqtt_port) + "'></div>";
+    html += "<div class='input-group'><label>MQTT User</label><input type='text' name='user' value='" + String(mqtt_user) + "' maxlength='19'></div>";
+    html += "<div class='input-group'><label>MQTT Password</label><input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'></div>";
+
+    html += "<div class='input-group'><label>Temp Offset (C) <span class='val'><output name='out_off'>" + String(temp_offset, 1) + "</output></span></label>";
+    html += "<input type='range' name='offset' min='-10' max='10' step='0.1' value='" + String(temp_offset) + "'></div>";
+
+    html += "<div class='input-group'><label>LED Blink (ms) <span class='val'><output name='out_led'>" + String(led_interval) + "</output></span></label>";
+    html += "<input type='range' name='led' min='0' max='30000' step='1000' value='" + String(led_interval) + "'></div>";
+
+    html += "<div class='input-group'><label>Display ON (min) <span class='val'><output name='out_on'>" + String(display_on_min) + "</output></span></label>";
+    html += "<input type='range' name='disp_on' min='1' max='60' step='1' value='" + String(display_on_min) + "'></div>";
+
+    html += "<div class='input-group'><label>Total Cycle (min) <span class='val'><output name='out_per'>" + String(display_period_min) + "</output></span></label>";
+    html += "<input type='range' name='disp_per' min='0' max='60' step='1' value='" + String(display_period_min) + "'></div>";
+
+    html += "<div style='text-align:center'><input type='submit' value='Save' class='btn'></div>";
+    html += "</form><div style='text-align:center;margin-top:10px'><a href='/'>Back</a></div>";
+    html += "</div></body></html>";
     server.send(200, "text/html", html);
 }
 
@@ -135,7 +155,10 @@ void handleSave() {
     if (server.hasArg("offset")) temp_offset = server.arg("offset").toFloat();
 
     saveConfig();
-    server.send(200, "text/html", "Settings Saved. <a href='/'>Back to Home</a>");
+    String html = getPageHeader("Success");
+    html += "<h1>Saved!</h1><p>Settings stored successfully.</p>";
+    html += "<div style='text-align:center'><a href='/' class='btn'>Back</a></div></div></body></html>";
+    server.send(200, "text/html", html);
 
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.disconnect();
@@ -143,13 +166,13 @@ void handleSave() {
 
 void setupMQTTDiscovery() {
     String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
-    String deviceName = "ESP32-Station-" + chipId;
+    String deviceName = "ESP32C3-Station-" + chipId;
 
     String tempConfigTopic = "homeassistant/sensor/" + chipId + "_T/config";
     String tempPayload = "{\"name\": \"Temperature\", \"stat_t\": \"" + mqtt_topic_temp + "\", \"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"uniq_id\": \""+ chipId + "_T\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
     String humConfigTopic = "homeassistant/sensor/" + chipId + "_H/config";
-    String humPayload = "{\"name\": \"Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \"" + chipId + "_H\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
+    String humPayload = "{\"name\": \"Humidity\", \"stat_t\": \"" + mqtt_topic_hum + "\", \"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"uniq_id\": \""+ chipId + "_H\", \"dev\": {\"ids\": [\"" + chipId + "\"], \"name\": \"" + deviceName + "\"}}";
 
     mqttClient.publish(tempConfigTopic.c_str(), tempPayload.c_str(), true);
     mqttClient.publish(humConfigTopic.c_str(), humPayload.c_str(), true);
@@ -158,7 +181,7 @@ void setupMQTTDiscovery() {
 void reconnectMQTT() {
     if (!mqttClient.connected()) {
         Serial.print("Attempting MQTT connection...");
-        String clientId = "ESP32Client-" + String(random(0xffff), HEX);
+        String clientId = "ESP32C3Client-" + String(random(0xffff), HEX);
 
         bool connected = false;
         if (strlen(mqtt_user) > 0) {
@@ -251,6 +274,10 @@ void setup() {
 
     WiFi.setSleep(false);
     WiFiManager wm;
+    // Set menu without "update"
+    std::vector<const char *> menu = {"wifi", "info", "sep", "restart", "exit"};
+    wm.setMenu(menu);
+
     if(!wm.autoConnect("ESP32-Setup")) {
         Serial.println("WiFi Portal Timeout");
     }

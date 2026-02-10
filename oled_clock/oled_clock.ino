@@ -1,11 +1,11 @@
 /*
- * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-S3 Mini (V6.2)
+ * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini (V7)
  *
- * ZMIANY V6.2:
- * - Dodano mozliwosc ustawienia OFFSETU temperatury przez WWW
- * - Poprawiono bezpieczenstwo kopiowania danych (strlcpy)
- * - Wlasny interfejs WWW do konfiguracji MQTT i sprzetu
- * - Funkcja "Screen Saver": wylaczanie ekranu cyklicznie
+ * ZMIANY V7:
+ * - Nowoczesny layout WWW (CSS)
+ * - Suwaki (sliders) do ustawiania offsetu, LED i wygaszacza
+ * - Raportowanie MQTT co 20 minut
+ * - Usuniecie opcji "Update" z WiFiManagera
  */
 
 #include <Arduino.h>
@@ -28,7 +28,7 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Piny (dla S3 Mini / C3 Mini)
+// Piny (dla C3 Mini)
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define LED_PIN 0
@@ -59,7 +59,7 @@ unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
 const long sensorInterval = 1000;
-const long mqttInterval = 60000;
+const long mqttInterval = 1200000; // 20 minut
 
 float temperature = 0;
 float humidity = 0;
@@ -108,29 +108,50 @@ void saveConfig() {
     }
 }
 
-// Obsluga WWW
+// Obsluga WWW z CSS
+String getPageHeader(String title) {
+    String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><meta charset='UTF-8'>";
+    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:inline-block;background:#5c67f2;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}</style>";
+    html += "<title>" + title + "</title></head><body><div class='card'>";
+    return html;
+}
+
 void handleRoot() {
-    String html = "<html><head><meta charset='UTF-8'></head><body><h1>ESP32 Node Status</h1>";
-    html += "<p>Temperatura: " + String(temperature) + " C (Offset: " + String(temp_offset) + ")</p>";
-    html += "<p>Wilgotnosc: " + String(humidity) + " %</p>";
+    String html = getPageHeader("Status ESP32-C3");
+    html += "<h1>Status Systemu</h1>";
+    html += "<p>Temperatura: <b>" + String(temperature, 1) + " C</b></p>";
+    html += "<p>Wilgotnosc: <b>" + String(humidity, 0) + " %</b></p>";
+    html += "<p>Offset: " + String(temp_offset, 1) + " C</p>";
     html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
-    html += "<p><a href='/config'>Ustawienia Konfiguracji</a></p>";
-    html += "</body></html>";
+    html += "<hr><a href='/config' class='btn'>Ustawienia</a>";
+    html += "</div><div class='footer'>V7 - Raport MQTT co 20 min</div></body></html>";
     server.send(200, "text/html", html);
 }
 
 void handleConfig() {
-    String html = "<html><head><meta charset='UTF-8'></head><body><h1>Ustawienia</h1><form action='/save' method='POST'>";
-    html += "Serwer MQTT: <input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'><br>";
-    html += "Port MQTT: <input type='text' name='port' value='" + String(mqtt_port) + "'><br>";
-    html += "Uzytkownik MQTT: <input type='text' name='user' value='" + String(mqtt_user) + "' maxlength='19'><br>";
-    html += "Haslo MQTT: <input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'><br><br>";
-    html += "Miganie LED (ms, 0=off): <input type='text' name='led' value='" + String(led_interval) + "'><br>";
-    html += "Ekran WLACZONY (min): <input type='text' name='disp_on' value='" + String(display_on_min) + "'><br>";
-    html += "Cykl calkowity (min): <input type='text' name='disp_per' value='" + String(display_period_min) + "'><br>";
-    html += "Offset Temperatury (C): <input type='text' name='offset' value='" + String(temp_offset) + "'><br><br>";
-    html += "<input type='submit' value='Zapisz'>";
-    html += "</form><p><a href='/'>Powrot</a></p></body></html>";
+    String html = getPageHeader("Konfiguracja");
+    html += "<h1>Ustawienia</h1><form action='/save' method='POST' oninput='out_off.value=offset.value; out_led.value=led.value; out_on.value=disp_on.value; out_per.value=disp_per.value'>";
+
+    html += "<div class='input-group'><label>Serwer MQTT</label><input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'></div>";
+    html += "<div class='input-group'><label>Port MQTT</label><input type='number' name='port' value='" + String(mqtt_port) + "'></div>";
+    html += "<div class='input-group'><label>Uzytkownik MQTT</label><input type='text' name='user' value='" + String(mqtt_user) + "' maxlength='19'></div>";
+    html += "<div class='input-group'><label>Haslo MQTT</label><input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'></div>";
+
+    html += "<div class='input-group'><label>Offset Temp (C) <span class='val'><output name='out_off'>" + String(temp_offset, 1) + "</output></span></label>";
+    html += "<input type='range' name='offset' min='-10' max='10' step='0.1' value='" + String(temp_offset) + "'></div>";
+
+    html += "<div class='input-group'><label>Miganie LED (ms) <span class='val'><output name='out_led'>" + String(led_interval) + "</output></span></label>";
+    html += "<input type='range' name='led' min='0' max='30000' step='1000' value='" + String(led_interval) + "'></div>";
+
+    html += "<div class='input-group'><label>Ekran WL (min) <span class='val'><output name='out_on'>" + String(display_on_min) + "</output></span></label>";
+    html += "<input type='range' name='disp_on' min='1' max='60' step='1' value='" + String(display_on_min) + "'></div>";
+
+    html += "<div class='input-group'><label>Cykl calkowity (min) <span class='val'><output name='out_per'>" + String(display_period_min) + "</output></span></label>";
+    html += "<input type='range' name='disp_per' min='0' max='60' step='1' value='" + String(display_period_min) + "'></div>";
+
+    html += "<input type='submit' value='Zapisz Ustawienia' class='btn'>";
+    html += "</form><div style='text-align:center;margin-top:10px'><a href='/'>Powrot</a></div>";
+    html += "</div></body></html>";
     server.send(200, "text/html", html);
 }
 
@@ -145,7 +166,10 @@ void handleSave() {
     if (server.hasArg("offset")) temp_offset = server.arg("offset").toFloat();
 
     saveConfig();
-    server.send(200, "text/html", "Ustawienia zapisane. <a href='/'>Powrot</a>");
+    String html = getPageHeader("Sukces");
+    html += "<h1>Zapisano!</h1><p>Ustawienia zostaly zapamietane.</p>";
+    html += "<a href='/' class='btn'>Powrot</a></div></body></html>";
+    server.send(200, "text/html", html);
 
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.disconnect();
@@ -261,6 +285,10 @@ void setup() {
 
     WiFi.setSleep(false);
     WiFiManager wm;
+    // Usuniecie Update z menu
+    std::vector<const char *> menu = {"wifi", "info", "sep", "restart", "exit"};
+    wm.setMenu(menu);
+
     if(!wm.autoConnect("ESP32-Setup")) {
         Serial.println("WiFi Portal Timeout");
     }
