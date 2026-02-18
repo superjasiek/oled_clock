@@ -18,7 +18,7 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Pins - Updated to SDA 10 as confirmed working in V6.2
+// Pins
 #define I2C_SDA 10
 #define I2C_SCL 9
 #define LED_PIN 0
@@ -33,6 +33,8 @@ int display_on_min = 2;
 int display_period_min = 10;
 float temp_offset = 0.0;
 int mqtt_report_min = 20;
+int timezone_offset = 1;       // Hours offset from UTC
+bool is_24h = true;            // 24h or 12h format
 
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -76,6 +78,8 @@ void loadConfig() {
                     display_period_min = doc["display_period_min"] | 10;
                     temp_offset = doc["temp_offset"] | 0.0;
                     mqtt_report_min = doc["mqtt_report_min"] | 20;
+                    timezone_offset = doc["timezone_offset"] | 1;
+                    is_24h = doc["is_24h"] | true;
                 }
                 configFile.close();
             }
@@ -94,6 +98,8 @@ void saveConfig() {
     doc["display_period_min"] = display_period_min;
     doc["temp_offset"] = temp_offset;
     doc["mqtt_report_min"] = mqtt_report_min;
+    doc["timezone_offset"] = timezone_offset;
+    doc["is_24h"] = is_24h;
 
     File configFile = LittleFS.open("/config.json", "w");
     if (configFile) {
@@ -120,10 +126,10 @@ void scanI2C() {
     if (nDevices == 0) i2c_debug = "No devices found";
 }
 
-// Web Server Handlers with CSS
+// Web Server Handlers
 String getPageHeader(String title) {
     String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><meta charset='UTF-8'>";
-    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:block;background:#5c67f2;color:#fff;padding:12px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center;font-size:1em;font-weight:bold}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}hr{border:0;border-top:1px solid #eee;margin:20px 0}.debug-box{background:#eee;padding:10px;font-family:monospace;font-size:0.9em;margin-top:10px;border-radius:4px}</style>";
+    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number],select{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:block;background:#5c67f2;color:#fff;padding:12px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center;font-size:1em;font-weight:bold}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}hr{border:0;border-top:1px solid #eee;margin:20px 0}.debug-box{background:#eee;padding:10px;font-family:monospace;font-size:0.9em;margin-top:10px;border-radius:4px}</style>";
     html += "<title>" + title + "</title></head><body><div class='card'>";
     return html;
 }
@@ -131,14 +137,13 @@ String getPageHeader(String title) {
 void handleRoot() {
     String html = getPageHeader("ESP32-C3 Node Status");
     html += "<h1>System Status</h1>";
-    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b> (Offset: " + String(temp_offset, 1) + ")</p>";
+    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b></p>";
     html += "<p>Humidity: <b>" + String(humidity, 0) + " %</b></p>";
-    html += "<p>AHT10 Sensor: <b>" + String(sensorFound ? "OK" : "NOT FOUND") + "</b></p>";
-    html += "<p>Display State: <b>" + String(displayOn ? "ON" : "OFF") + "</b></p>";
+    html += "<p>Time Format: <b>" + String(is_24h ? "24h" : "12h") + " (UTC" + (timezone_offset>=0?"+":"") + String(timezone_offset) + ")</b></p>";
     html += "<hr><p>I2C Devices Found:<div class='debug-box'>" + i2c_debug + "</div></p>";
     html += "<hr><a href='/config' class='btn'>Settings</a>";
     html += "<hr><div style='text-align:center'><a href='/scan'>Re-scan I2C</a></div>";
-    html += "</div><div class='footer'>ESP32 IoT Node V10</div></body></html>";
+    html += "</div><div class='footer'>ESP32 IoT Node V11</div></body></html>";
     server.send(200, "text/html", html);
 }
 
@@ -152,12 +157,15 @@ void handleConfig() {
     String html = getPageHeader("Configuration");
     html += "<h1>Settings</h1><form action='/save' method='POST' oninput='out_off.value=offset.value; out_led.value=led.value; out_on.value=disp_on.value; out_per.value=disp_per.value; out_mqtt.value=mqtt_freq.value'>";
 
-    html += "<div class='input-group'><label>MQTT Server</label><input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'></div>";
+    html += "<div class='input-group'><label>Timezone (UTC Offset)</label><input type='number' name='tz' value='" + String(timezone_offset) + "'></div>";
+    html += "<div class='input-group'><label>Clock Format</label><select name='fmt'><option value='1' " + String(is_24h?"selected":"") + ">24h</option><option value='0' " + String(!is_24h?"selected":"") + ">12h (AM/PM)</option></select></div>";
+
+    html += "<hr><div class='input-group'><label>MQTT Server</label><input type='text' name='server' value='" + String(mqtt_server) + "' maxlength='39'></div>";
     html += "<div class='input-group'><label>MQTT Port</label><input type='number' name='port' value='" + String(mqtt_port) + "'></div>";
     html += "<div class='input-group'><label>MQTT User</label><input type='text' name='user' value='" + String(mqtt_user) + "' maxlength='19'></div>";
     html += "<div class='input-group'><label>MQTT Password</label><input type='password' name='pass' value='" + String(mqtt_pass) + "' maxlength='19'></div>";
 
-    html += "<div class='input-group'><label>Temp Offset (C) <span class='val'><output name='out_off'>" + String(temp_offset, 1) + "</output></span></label>";
+    html += "<hr><div class='input-group'><label>Temp Offset (C) <span class='val'><output name='out_off'>" + String(temp_offset, 1) + "</output></span></label>";
     html += "<input type='range' name='offset' min='-10' max='10' step='0.1' value='" + String(temp_offset) + "'></div>";
 
     html += "<div class='input-group'><label>MQTT Report (min) <span class='val'><output name='out_mqtt'>" + String(mqtt_report_min) + "</output></span></label>";
@@ -179,6 +187,8 @@ void handleConfig() {
 }
 
 void handleSave() {
+    if (server.hasArg("tz")) timezone_offset = server.arg("tz").toInt();
+    if (server.hasArg("fmt")) is_24h = (server.arg("fmt") == "1");
     if (server.hasArg("server")) strlcpy(mqtt_server, server.arg("server").c_str(), sizeof(mqtt_server));
     if (server.hasArg("port")) mqtt_port = server.arg("port").toInt();
     if (server.hasArg("user")) strlcpy(mqtt_user, server.arg("user").c_str(), sizeof(mqtt_user));
@@ -190,6 +200,8 @@ void handleSave() {
     if (server.hasArg("mqtt_freq")) mqtt_report_min = server.arg("mqtt_freq").toInt();
 
     saveConfig();
+    timeClient.setTimeOffset(timezone_offset * 3600);
+
     String html = getPageHeader("Success");
     html += "<h1>Saved!</h1><p>Settings stored successfully.</p>";
     html += "<a href='/' class='btn'>Back</a></div></body></html>";
@@ -215,22 +227,15 @@ void setupMQTTDiscovery() {
 
 void reconnectMQTT() {
     if (!mqttClient.connected()) {
-        Serial.print("Attempting MQTT connection...");
         String clientId = "ESP32C3Client-" + String(random(0xffff), HEX);
-
         bool connected = false;
         if (strlen(mqtt_user) > 0) {
             connected = mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_pass);
         } else {
             connected = mqttClient.connect(clientId.c_str());
         }
-
         if (connected) {
-            Serial.println("connected");
             setupMQTTDiscovery();
-        } else {
-            Serial.print("failed, rc=");
-            Serial.print(mqttClient.state());
         }
     }
 }
@@ -246,18 +251,32 @@ void updateDisplay() {
     }
     display.drawLine(0, 11, 31, 11, SSD1306_WHITE);
 
+    int h = timeClient.getHours();
+    String ampm = "";
+    if (!is_24h) {
+        ampm = (h >= 12) ? "PM" : "AM";
+        h = h % 12;
+        if (h == 0) h = 12;
+    }
+
     display.setTextSize(2);
     display.setCursor(4, 18);
-    if(timeClient.getHours() < 10) display.print("0");
-    display.print(timeClient.getHours());
+    if(h < 10) display.print("0");
+    display.print(h);
 
     display.setCursor(4, 38);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    display.setCursor(4, 58); // Reverted to working V6.2 coordinate
+    display.setCursor(4, 58);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
+
+    if (!is_24h) {
+        display.setTextSize(1);
+        display.setCursor(18, 72);
+        display.print(ampm);
+    }
 
     display.drawLine(0, 80, 31, 80, SSD1306_WHITE);
 
@@ -292,7 +311,6 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    // I2C Pins 10 and 9 as confirmed working in V6.2
     Wire.begin(I2C_SDA, I2C_SCL);
     delay(100);
 
@@ -302,17 +320,11 @@ void setup() {
     display.ssd1306_command(SSD1306_DISPLAYON);
     display.clearDisplay();
     display.setRotation(3);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0,0);
-    display.setTextSize(1);
-    display.println("Start...");
     display.display();
 
     if (!aht.begin()) {
-        Serial.println("AHT10 ERROR");
         sensorFound = false;
     } else {
-        Serial.println("AHT10 OK");
         sensorFound = true;
     }
 
@@ -332,6 +344,8 @@ void setup() {
     server.begin();
 
     timeClient.begin();
+    timeClient.setTimeOffset(timezone_offset * 3600);
+
     mqttClient.setServer(mqtt_server, mqtt_port);
     mqttClient.setBufferSize(512);
 
@@ -343,7 +357,6 @@ void loop() {
     server.handleClient();
     timeClient.update();
 
-    // 1. Read Sensor every 1s
     if (currentMillis - lastSensorRead >= sensorInterval) {
         lastSensorRead = currentMillis;
         if (sensorFound) {
@@ -364,7 +377,6 @@ void loop() {
         }
     }
 
-    // 2. Display Power Management
     if (display_period_min > 0) {
         long currentTotalMins = (currentMillis / 60000);
         bool shouldBeOn = (currentTotalMins % display_period_min) < display_on_min;
@@ -378,15 +390,8 @@ void loop() {
                 display.ssd1306_command(SSD1306_DISPLAYOFF);
             }
         }
-    } else {
-        if (!displayOn) {
-            displayOn = true;
-            display.ssd1306_command(SSD1306_DISPLAYON);
-            updateDisplay();
-        }
     }
 
-    // 3. LED Logic
     if (led_interval > 0) {
         if (currentMillis - lastLedBlink >= led_interval) {
             lastLedBlink = currentMillis;
@@ -395,11 +400,8 @@ void loop() {
         if (digitalRead(LED_PIN) == HIGH && currentMillis - lastLedBlink >= 100) {
             digitalWrite(LED_PIN, LOW);
         }
-    } else {
-        digitalWrite(LED_PIN, LOW);
     }
 
-    // 4. MQTT Connection
     if (!mqttClient.connected() && WiFi.status() == WL_CONNECTED) {
         static unsigned long lastReconnect = 0;
         if (currentMillis - lastReconnect > 15000) {
@@ -410,7 +412,6 @@ void loop() {
         mqttClient.loop();
     }
 
-    // 5. MQTT Reporting Logic
     unsigned long mqttIntervalMs = (unsigned long)mqtt_report_min * 60000;
     if (currentMillis - lastMqttPublish >= mqttIntervalMs) {
         lastMqttPublish = currentMillis;
