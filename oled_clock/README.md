@@ -1,31 +1,48 @@
-# Zegar OLED i Czujnik AHT10 dla ESP32-C3 Super Mini
+# ESP32-C3 Super Mini OLED Clock & AHT10 (V10)
 
-Oprogramowanie dla ESP32-C3 z ekranem OLED 0.91" i czujnikiem AHT10.
+Oprogramowanie dla ESP32-C3 Super Mini z ekranem OLED 0.91" i czujnikiem AHT10.
 
-## Instrukcja konfiguracji Arduino IDE
+## Funkcje
+- **Wyświetlacz:** Pionowa orientacja, zegar (NTP) + Temperatura i Wilgotność.
+- **Sensor:** AHT10 (odczyt co 1s).
+- **WiFi:** WiFiManager (tryb AP do konfiguracji sieci).
+- **MQTT:** Integracja z Home Assistant (Discovery), konfigurowalny serwer i częstotliwość raportów.
+- **Web UI:** Panel pod adresem IP urządzenia do konfiguracji sprzętu i MQTT.
+- **Zarządzanie Energią:** Konfigurowalny wygaszacz ekranu (Duty Cycle).
+- **LED:** Miganie na pinie 0 (konfigurowalny interfejs).
 
-Aby poprawnie skompilować i wgrać program na **ESP32-C3 Super Mini**, wykonaj poniższe kroki:
+## Połączenia (Hardware)
+- **OLED & AHT10 (I2C):**
+  - SDA -> **Pin 10** (Ważne: Niektóre moduły Super Mini wymagają pinu 10 zamiast 8)
+  - SCL -> **Pin 9**
+  - VCC -> 3.3V
+  - GND -> GND
+- **LED:**
+  - Wbudowana lub zewnętrzna -> **Pin 0**
 
-### 1. Ustawienia Płytki (Board)
-W menu **Tools** (Narzędzia) ustaw:
-- **Board**: "ESP32C3 Dev Module"
-- **USB CDC On Boot**: **Enabled** (Kluczowe dla Serial Monitora przez USB!)
-- **Flash Mode**: "QIO" (lub "DIO")
-- **Flash Size**: "4MB"
+## Konfiguracja (Web Panel)
+Po połączeniu z WiFi, wejdź na adres IP urządzenia (widoczny w Serial Monitorze lub na routerze).
+Dostępne ustawienia:
+- Serwer MQTT, Port, User, Password.
+- **Częstotliwość MQTT:** Od 1 do 120 minut.
+- **Offset Temperatury:** Korekta odczytu czujnika.
+- **Czas świecenia ekranu:** Ustawienie oszczędzania wypalania OLED.
+- **Diagnostyka I2C:** Przycisk skanowania magistrali I2C.
 
-### 2. Ostrzeżenie kompilacji (Framework Warning)
-Podczas kompilacji możesz zobaczyć ostrzeżenie:
-`warning: 'return' with no value, in function returning non-void` w pliku `esp32-hal-uart.c`.
-**Jest to znany błąd w oficjalnym frameworku Espressif i jest on całkowicie nieszkodliwy.** Program będzie działał poprawnie mimo tego komunikatu.
+## Instalacja (Arduino IDE)
+1. Wymagane biblioteki:
+   - Adafruit SSD1306 & GFX
+   - Adafruit AHTX0
+   - WiFiManager
+   - PubSubClient
+   - NTPClient
+   - ArduinoJson
+2. Ustawienia płytki: **ESP32C3 Dev Module**
+3. **Ważne:** Włącz `USB CDC On Boot: Enabled` w menu Tools, aby widzieć logi Serial.
 
-### 3. Debugowanie (Serial Monitor)
-1. Podłącz urządzenie przez USB.
-2. Otwórz **Serial Monitor** i ustaw prędkość **115200**.
-3. Naciśnij przycisk **RESET** na płytce.
-4. Dzięki opcji "USB CDC On Boot" oraz dodanemu w kodzie oczekiwaniu (`while(!Serial)`), logi startowe powinny pojawić się natychmiast po otwarciu monitora.
-
-## Funkcje programu
-- **WiFiManager**: Rozgłasza sieć AP **ESP32C3-Setup**, jeśli nie może się połączyć z WiFi.
-- **Płynny zegar**: Odświeżanie co 1 sekundę.
-- **Unikalność**: Każde urządzenie ma własne tematy MQTT oparte na Chip ID (np. `esp32c3/a1b2c3/temperature`).
-- **Pionowy Layout**: Zoptymalizowany pod ekran 0.91" (32x128).
+## Wersja V10 - Co nowego?
+- Naprawiono problem z czarnym ekranem (poprawna inicjalizacja).
+- Przywrócono Pin 10 dla SDA (zgodność z większością modułów C3 Super Mini).
+- Dodano separację odczytu sensora od sieci - zegar i temperatura odświeżają się płynnie.
+- Nowoczesny wygląd interfejsu WWW z suwakami.
+- Dodano funkcję ponownego skanowania I2C w razie problemów z połączeniem.

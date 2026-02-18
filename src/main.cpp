@@ -18,8 +18,8 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Pins
-#define I2C_SDA 8
+// Pins - Updated to SDA 10 as confirmed working in V6.2
+#define I2C_SDA 10
 #define I2C_SCL 9
 #define LED_PIN 0
 
@@ -129,16 +129,16 @@ String getPageHeader(String title) {
 }
 
 void handleRoot() {
-    String html = getPageHeader("ESP32-C3 Diagnostics");
+    String html = getPageHeader("ESP32-C3 Node Status");
     html += "<h1>System Status</h1>";
-    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b></p>";
+    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b> (Offset: " + String(temp_offset, 1) + ")</p>";
     html += "<p>Humidity: <b>" + String(humidity, 0) + " %</b></p>";
     html += "<p>AHT10 Sensor: <b>" + String(sensorFound ? "OK" : "NOT FOUND") + "</b></p>";
     html += "<p>Display State: <b>" + String(displayOn ? "ON" : "OFF") + "</b></p>";
     html += "<hr><p>I2C Devices Found:<div class='debug-box'>" + i2c_debug + "</div></p>";
     html += "<hr><a href='/config' class='btn'>Settings</a>";
     html += "<hr><div style='text-align:center'><a href='/scan'>Re-scan I2C</a></div>";
-    html += "</div><div class='footer'>ESP32 IoT Node V9</div></body></html>";
+    html += "</div><div class='footer'>ESP32 IoT Node V10</div></body></html>";
     server.send(200, "text/html", html);
 }
 
@@ -192,7 +192,7 @@ void handleSave() {
     saveConfig();
     String html = getPageHeader("Success");
     html += "<h1>Saved!</h1><p>Settings stored successfully.</p>";
-    html += "<div style='text-align:center'><a href='/' class='btn'>Back</a></div></div></body></html>";
+    html += "<a href='/' class='btn'>Back</a></div></body></html>";
     server.send(200, "text/html", html);
 
     mqttClient.setServer(mqtt_server, mqtt_port);
@@ -255,8 +255,7 @@ void updateDisplay() {
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    display.setCursor(4, 70);
-    display.setTextSize(1);
+    display.setCursor(4, 58); // Reverted to working V6.2 coordinate
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
@@ -293,14 +292,12 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
+    // I2C Pins 10 and 9 as confirmed working in V6.2
     Wire.begin(I2C_SDA, I2C_SCL);
     delay(100);
-    scanI2C();
 
-    // Try OLED initialization
-    Serial.println("Init OLED...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println("SSD1306 ERROR: 0x3C not responding");
+        Serial.println("SSD1306 ERROR");
     }
     display.ssd1306_command(SSD1306_DISPLAYON);
     display.clearDisplay();
@@ -308,13 +305,11 @@ void setup() {
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
     display.setTextSize(1);
-    display.println("V9 Start...");
+    display.println("Start...");
     display.display();
 
-    // Try Sensor initialization
-    Serial.println("Init AHT10...");
     if (!aht.begin()) {
-        Serial.println("AHT10 ERROR: 0x38 not responding");
+        Serial.println("AHT10 ERROR");
         sensorFound = false;
     } else {
         Serial.println("AHT10 OK");
@@ -358,11 +353,9 @@ void loop() {
                 humidity = hum.relative_humidity;
             }
         } else if (currentMillis - lastAhtRetry > 30000) {
-            // Retry AHT every 30s
             lastAhtRetry = currentMillis;
             if (aht.begin()) {
                 sensorFound = true;
-                Serial.println("AHT10 Recovered!");
             }
         }
 

@@ -1,12 +1,13 @@
 /*
- * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini (V9)
+ * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini (V10)
  *
- * ZMIANY V9:
+ * ZMIANY V10:
+ * - Poprawiony pin SDA na 10 (zgodnie z dzialajaca wersja V6.2)
+ * - Odseparowanie odczytu sensora (co 1s) od raportowania MQTT
+ * - Suwak do ustawiania czestotliwosci raportow MQTT (1-120 min)
  * - Diagnostyka I2C widoczna przez WWW (Status Page)
- * - Przycisk "Re-scan I2C" do testowania polaczen
  * - Cykliczna proba przywrocenia sensora (co 30s) jesli brak odczytu
- * - Suwak czestotliwosci MQTT (1-120 min)
- * - Poprawiona logika wyswietlacza (wymuszenie ON)
+ * - Nowoczesny interfejs WWW (CSS) z suwakami
  */
 
 #include <Arduino.h>
@@ -29,8 +30,8 @@
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
 
-// Piny (C3 / S3 Mini)
-#define I2C_SDA 8
+// Piny - Zmieniono SDA na 10 (bylo 8)
+#define I2C_SDA 10
 #define I2C_SCL 9
 #define LED_PIN 0
 
@@ -140,16 +141,15 @@ String getPageHeader(String title) {
 }
 
 void handleRoot() {
-    String html = getPageHeader("Diagnostyka ESP32-C3");
+    String html = getPageHeader("Diagnostyka ESP32");
     html += "<h1>Status Systemu</h1>";
     html += "<p>Temperatura: <b>" + String(temperature, 1) + " C</b></p>";
     html += "<p>Wilgotnosc: <b>" + String(humidity, 0) + " %</b></p>";
-    html += "<p>Czujnik AHT10: <b>" + String(sensorFound ? "OK" : "NIEZNALEZIONO") + "</b></p>";
     html += "<p>Ekran: <b>" + String(displayOn ? "WLACZONY" : "WYLACZONY") + "</b></p>";
-    html += "<hr><p>Wykryte adresy I2C:<div class='debug-box'>" + i2c_debug + "</div></p>";
+    html += "<hr><p>Adresy I2C:<div class='debug-box'>" + i2c_debug + "</div></p>";
     html += "<hr><a href='/config' class='btn'>Ustawienia</a>";
     html += "<hr><div style='text-align:center'><a href='/scan'>Ponowny skan I2C</a></div>";
-    html += "</div><div class='footer'>ESP32 IoT Node V9</div></body></html>";
+    html += "</div><div class='footer'>V10 - MQTT co " + String(mqtt_report_min) + " min</div></body></html>";
     server.send(200, "text/html", html);
 }
 
@@ -266,8 +266,7 @@ void updateDisplay() {
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
 
-    display.setCursor(4, 70);
-    display.setTextSize(1);
+    display.setCursor(4, 58);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
@@ -304,9 +303,9 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
+    // I2C na pinach 10 i 9 (V6.2 working)
     Wire.begin(I2C_SDA, I2C_SCL);
     delay(100);
-    scanI2C();
 
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
         Serial.println("SSD1306 ERROR");
