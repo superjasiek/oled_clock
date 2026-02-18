@@ -1,5 +1,7 @@
 # ESP32-C3 Super Mini OLED Clock & AHT10 (V10)
 
+
+![Lander IoT](1000075040.jpg)
 Oprogramowanie dla ESP32-C3 Super Mini z ekranem OLED 0.91" i czujnikiem AHT10.
 
 ## Funkcje
