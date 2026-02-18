@@ -32,7 +32,7 @@ int led_interval = 10000;
 int display_on_min = 2;
 int display_period_min = 10;
 float temp_offset = 0.0;
-int mqtt_report_min = 20;      // New: MQTT frequency in minutes
+int mqtt_report_min = 20;
 
 String mqtt_topic_temp;
 String mqtt_topic_hum;
@@ -49,12 +49,14 @@ WebServer server(80);
 unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
+unsigned long lastAhtRetry = 0;
 const long sensorInterval = 1000;
 
 float temperature = 0;
 float humidity = 0;
 bool sensorFound = false;
 bool displayOn = true;
+String i2c_debug = "No scan performed";
 
 // Persistence
 void loadConfig() {
@@ -100,24 +102,50 @@ void saveConfig() {
     }
 }
 
+void scanI2C() {
+    i2c_debug = "";
+    byte error, address;
+    int nDevices = 0;
+    for (address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+            i2c_debug += "0x";
+            if (address < 16) i2c_debug += "0";
+            i2c_debug += String(address, HEX);
+            i2c_debug += " ";
+            nDevices++;
+        }
+    }
+    if (nDevices == 0) i2c_debug = "No devices found";
+}
+
 // Web Server Handlers with CSS
 String getPageHeader(String title) {
     String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><meta charset='UTF-8'>";
-    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:block;background:#5c67f2;color:#fff;padding:12px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center;font-size:1em;font-weight:bold}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}hr{border:0;border-top:1px solid #eee;margin:20px 0}</style>";
+    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:block;background:#5c67f2;color:#fff;padding:12px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center;font-size:1em;font-weight:bold}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}hr{border:0;border-top:1px solid #eee;margin:20px 0}.debug-box{background:#eee;padding:10px;font-family:monospace;font-size:0.9em;margin-top:10px;border-radius:4px}</style>";
     html += "<title>" + title + "</title></head><body><div class='card'>";
     return html;
 }
 
 void handleRoot() {
-    String html = getPageHeader("ESP32-C3 Node Status");
+    String html = getPageHeader("ESP32-C3 Diagnostics");
     html += "<h1>System Status</h1>";
-    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b> (Offset: " + String(temp_offset, 1) + ")</p>";
+    html += "<p>Temperature: <b>" + String(temperature, 1) + " C</b></p>";
     html += "<p>Humidity: <b>" + String(humidity, 0) + " %</b></p>";
+    html += "<p>AHT10 Sensor: <b>" + String(sensorFound ? "OK" : "NOT FOUND") + "</b></p>";
     html += "<p>Display State: <b>" + String(displayOn ? "ON" : "OFF") + "</b></p>";
-    html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
+    html += "<hr><p>I2C Devices Found:<div class='debug-box'>" + i2c_debug + "</div></p>";
     html += "<hr><a href='/config' class='btn'>Settings</a>";
-    html += "</div><div class='footer'>ESP32-C3 IoT Node V8</div></body></html>";
+    html += "<hr><div style='text-align:center'><a href='/scan'>Re-scan I2C</a></div>";
+    html += "</div><div class='footer'>ESP32 IoT Node V9</div></body></html>";
     server.send(200, "text/html", html);
+}
+
+void handleScan() {
+    scanI2C();
+    server.sendHeader("Location", "/");
+    server.send(303);
 }
 
 void handleConfig() {
@@ -164,7 +192,7 @@ void handleSave() {
     saveConfig();
     String html = getPageHeader("Success");
     html += "<h1>Saved!</h1><p>Settings stored successfully.</p>";
-    html += "<a href='/' class='btn'>Back</a></div></body></html>";
+    html += "<div style='text-align:center'><a href='/' class='btn'>Back</a></div></div></body></html>";
     server.send(200, "text/html", html);
 
     mqttClient.setServer(mqtt_server, mqtt_port);
@@ -222,10 +250,13 @@ void updateDisplay() {
     display.setCursor(4, 18);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
+
     display.setCursor(4, 38);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
-    display.setCursor(4, 58);
+
+    display.setCursor(4, 70);
+    display.setTextSize(1);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
@@ -238,6 +269,7 @@ void updateDisplay() {
     } else {
         display.print("--C");
     }
+
     display.setCursor(4, 102);
     if (sensorFound) {
         display.print((int)humidity); display.print("%");
@@ -263,10 +295,12 @@ void setup() {
 
     Wire.begin(I2C_SDA, I2C_SCL);
     delay(100);
+    scanI2C();
 
-    // Explicitly turn on display
+    // Try OLED initialization
+    Serial.println("Init OLED...");
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-        Serial.println("SSD1306 ERROR");
+        Serial.println("SSD1306 ERROR: 0x3C not responding");
     }
     display.ssd1306_command(SSD1306_DISPLAYON);
     display.clearDisplay();
@@ -274,13 +308,16 @@ void setup() {
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,0);
     display.setTextSize(1);
-    display.println("Starting...");
+    display.println("V9 Start...");
     display.display();
 
+    // Try Sensor initialization
+    Serial.println("Init AHT10...");
     if (!aht.begin()) {
-        Serial.println("AHT10 ERROR");
+        Serial.println("AHT10 ERROR: 0x38 not responding");
         sensorFound = false;
     } else {
+        Serial.println("AHT10 OK");
         sensorFound = true;
     }
 
@@ -294,6 +331,7 @@ void setup() {
     }
 
     server.on("/", handleRoot);
+    server.on("/scan", handleScan);
     server.on("/config", handleConfig);
     server.on("/save", HTTP_POST, handleSave);
     server.begin();
@@ -310,21 +348,30 @@ void loop() {
     server.handleClient();
     timeClient.update();
 
-    // 1. Read Sensor every 1s (Decoupled from display status)
+    // 1. Read Sensor every 1s
     if (currentMillis - lastSensorRead >= sensorInterval) {
         lastSensorRead = currentMillis;
         if (sensorFound) {
             sensors_event_t hum, temp;
-            aht.getEvent(&hum, &temp);
-            temperature = temp.temperature + temp_offset;
-            humidity = hum.relative_humidity;
+            if (aht.getEvent(&hum, &temp)) {
+                temperature = temp.temperature + temp_offset;
+                humidity = hum.relative_humidity;
+            }
+        } else if (currentMillis - lastAhtRetry > 30000) {
+            // Retry AHT every 30s
+            lastAhtRetry = currentMillis;
+            if (aht.begin()) {
+                sensorFound = true;
+                Serial.println("AHT10 Recovered!");
+            }
         }
+
         if (displayOn) {
             updateDisplay();
         }
     }
 
-    // 2. Display Power Management (Cycle Logic)
+    // 2. Display Power Management
     if (display_period_min > 0) {
         long currentTotalMins = (currentMillis / 60000);
         bool shouldBeOn = (currentTotalMins % display_period_min) < display_on_min;
@@ -339,7 +386,6 @@ void loop() {
             }
         }
     } else {
-        // Always ON if period is 0
         if (!displayOn) {
             displayOn = true;
             display.ssd1306_command(SSD1306_DISPLAYON);
@@ -376,8 +422,8 @@ void loop() {
     if (currentMillis - lastMqttPublish >= mqttIntervalMs) {
         lastMqttPublish = currentMillis;
         if (mqttClient.connected()) {
-            mqttClient.publish(mqtt_topic_temp.c_str(), String(temperature).c_str());
-            mqttClient.publish(mqtt_topic_hum.c_str(), String(humidity).c_str());
+            mqttClient.publish(mqtt_topic_temp.c_str(), String(temperature, 1).c_str());
+            mqttClient.publish(mqtt_topic_hum.c_str(), String(humidity, 1).c_str());
         }
     }
 }

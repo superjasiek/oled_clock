@@ -1,12 +1,12 @@
 /*
- * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini (V8)
+ * Projekt: Zegar OLED z czujnikiem AHT10 dla ESP32-C3 Super Mini (V9)
  *
- * ZMIANY V8:
- * - Odseparowanie odczytu sensora (co 1s) od raportowania MQTT
- * - Suwak do ustawiania czestotliwosci raportow MQTT (1-120 min)
- * - Poprawka wylaczonego ekranu (wymuszenie DISPLAYON)
- * - Nowoczesny interfejs WWW (CSS) z suwakami
- * - Usuniecie Update z menu WiFiManager
+ * ZMIANY V9:
+ * - Diagnostyka I2C widoczna przez WWW (Status Page)
+ * - Przycisk "Re-scan I2C" do testowania polaczen
+ * - Cykliczna proba przywrocenia sensora (co 30s) jesli brak odczytu
+ * - Suwak czestotliwosci MQTT (1-120 min)
+ * - Poprawiona logika wyswietlacza (wymuszenie ON)
  */
 
 #include <Arduino.h>
@@ -60,12 +60,14 @@ WebServer server(80);
 unsigned long lastSensorRead = 0;
 unsigned long lastLedBlink = 0;
 unsigned long lastMqttPublish = 0;
+unsigned long lastAhtRetry = 0;
 const long sensorInterval = 1000;
 
 float temperature = 0;
 float humidity = 0;
 bool sensorFound = false;
 bool displayOn = true;
+String i2c_debug = "Nie wykonano skanu";
 
 // Persistence
 void loadConfig() {
@@ -111,24 +113,50 @@ void saveConfig() {
     }
 }
 
+void scanI2C() {
+    i2c_debug = "";
+    byte error, address;
+    int nDevices = 0;
+    for (address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+            i2c_debug += "0x";
+            if (address < 16) i2c_debug += "0";
+            i2c_debug += String(address, HEX);
+            i2c_debug += " ";
+            nDevices++;
+        }
+    }
+    if (nDevices == 0) i2c_debug = "Brak urzadzen I2C";
+}
+
 // Obsluga WWW z CSS
 String getPageHeader(String title) {
     String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><meta charset='UTF-8'>";
-    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:block;background:#5c67f2;color:#fff;padding:12px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center;font-size:1em;font-weight:bold}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}hr{border:0;border-top:1px solid #eee;margin:20px 0}</style>";
+    html += "<style>body{font-family:sans-serif;background:#f4f4f9;padding:20px;color:#333;line-height:1.6}h1{color:#444}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);max-width:400px;margin:auto}.input-group{margin-bottom:15px}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number]{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}input[type=range]{width:100%;margin:10px 0}.btn{display:block;background:#5c67f2;color:#fff;padding:12px;text-decoration:none;border-radius:4px;border:none;cursor:pointer;width:100%;text-align:center;font-size:1em;font-weight:bold}.btn:hover{background:#4a54e1}.footer{margin-top:20px;text-align:center;font-size:0.8em;color:#888}span.val{float:right;color:#5c67f2;font-weight:bold}hr{border:0;border-top:1px solid #eee;margin:20px 0}.debug-box{background:#eee;padding:10px;font-family:monospace;font-size:0.9em;margin-top:10px;border-radius:4px}</style>";
     html += "<title>" + title + "</title></head><body><div class='card'>";
     return html;
 }
 
 void handleRoot() {
-    String html = getPageHeader("Status Stacji");
+    String html = getPageHeader("Diagnostyka ESP32-C3");
     html += "<h1>Status Systemu</h1>";
     html += "<p>Temperatura: <b>" + String(temperature, 1) + " C</b></p>";
     html += "<p>Wilgotnosc: <b>" + String(humidity, 0) + " %</b></p>";
+    html += "<p>Czujnik AHT10: <b>" + String(sensorFound ? "OK" : "NIEZNALEZIONO") + "</b></p>";
     html += "<p>Ekran: <b>" + String(displayOn ? "WLACZONY" : "WYLACZONY") + "</b></p>";
-    html += "<p>IP: " + WiFi.localIP().toString() + "</p>";
+    html += "<hr><p>Wykryte adresy I2C:<div class='debug-box'>" + i2c_debug + "</div></p>";
     html += "<hr><a href='/config' class='btn'>Ustawienia</a>";
-    html += "</div><div class='footer'>V8 - MQTT co " + String(mqtt_report_min) + " min</div></body></html>";
+    html += "<hr><div style='text-align:center'><a href='/scan'>Ponowny skan I2C</a></div>";
+    html += "</div><div class='footer'>ESP32 IoT Node V9</div></body></html>";
     server.send(200, "text/html", html);
+}
+
+void handleScan() {
+    scanI2C();
+    server.sendHeader("Location", "/");
+    server.send(303);
 }
 
 void handleConfig() {
@@ -233,10 +261,13 @@ void updateDisplay() {
     display.setCursor(4, 18);
     if(timeClient.getHours() < 10) display.print("0");
     display.print(timeClient.getHours());
+
     display.setCursor(4, 38);
     if(timeClient.getMinutes() < 10) display.print("0");
     display.print(timeClient.getMinutes());
-    display.setCursor(4, 58);
+
+    display.setCursor(4, 70);
+    display.setTextSize(1);
     if(timeClient.getSeconds() < 10) display.print("0");
     display.print(timeClient.getSeconds());
 
@@ -249,6 +280,7 @@ void updateDisplay() {
     } else {
         display.print("--C");
     }
+
     display.setCursor(4, 102);
     if (sensorFound) {
         display.print((int)humidity); display.print("%");
@@ -274,6 +306,7 @@ void setup() {
 
     Wire.begin(I2C_SDA, I2C_SCL);
     delay(100);
+    scanI2C();
 
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
         Serial.println("SSD1306 ERROR");
@@ -303,6 +336,7 @@ void setup() {
     }
 
     server.on("/", handleRoot);
+    server.on("/scan", handleScan);
     server.on("/config", handleConfig);
     server.on("/save", HTTP_POST, handleSave);
     server.begin();
@@ -319,15 +353,22 @@ void loop() {
     server.handleClient();
     timeClient.update();
 
-    // 1. Odczyt sensora co 1s (zawsze)
+    // 1. Odczyt sensora co 1s
     if (currentMillis - lastSensorRead >= sensorInterval) {
         lastSensorRead = currentMillis;
         if (sensorFound) {
             sensors_event_t hum, temp;
-            aht.getEvent(&hum, &temp);
-            temperature = temp.temperature + temp_offset;
-            humidity = hum.relative_humidity;
+            if (aht.getEvent(&hum, &temp)) {
+                temperature = temp.temperature + temp_offset;
+                humidity = hum.relative_humidity;
+            }
+        } else if (currentMillis - lastAhtRetry > 30000) {
+            lastAhtRetry = currentMillis;
+            if (aht.begin()) {
+                sensorFound = true;
+            }
         }
+
         if (displayOn) {
             updateDisplay();
         }
@@ -379,13 +420,13 @@ void loop() {
         mqttClient.loop();
     }
 
-    // 5. Raportowanie MQTT (niezalezne od wyswietlacza)
+    // 5. Raportowanie MQTT co X minut
     unsigned long mqttIntervalMs = (unsigned long)mqtt_report_min * 60000;
     if (currentMillis - lastMqttPublish >= mqttIntervalMs) {
         lastMqttPublish = currentMillis;
         if (mqttClient.connected()) {
-            mqttClient.publish(mqtt_topic_temp.c_str(), String(temperature).c_str());
-            mqttClient.publish(mqtt_topic_hum.c_str(), String(humidity).c_str());
+            mqttClient.publish(mqtt_topic_temp.c_str(), String(temperature, 1).c_str());
+            mqttClient.publish(mqtt_topic_hum.c_str(), String(humidity, 1).c_str());
         }
     }
 }
